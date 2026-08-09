@@ -1,0 +1,9 @@
+# Only needed to regenerate data/processed with scripts/build_artifacts.py.
+# The deployed app never imports any of this, which is why its cold start is
+# a parquet read rather than a dependency install.
+-r requirements.txt
+scikit-learn==1.6.1
+lightgbm==4.6.0
+holidays==0.83
+requests==2.29.0
+pytest==7.3.1

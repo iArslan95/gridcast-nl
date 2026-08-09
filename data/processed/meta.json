@@ -1,0 +1,154 @@
+{
+  "built_utc": "2026-08-09T20:22:49.751148+00:00",
+  "series": {
+    "start": "2016-01-01 00:00:00+00:00",
+    "end": "2020-09-30 23:00:00+00:00",
+    "hours": 41640,
+    "load_mean": 12877.106580211335,
+    "load_min": 7451.0,
+    "load_max": 18984.0,
+    "holiday_gap_pct": -17.329619223085103,
+    "trough_hour": 3,
+    "trough_mw": 10740.101369863014,
+    "peak_hour": 17,
+    "peak_mw": 14623.408219178082
+  },
+  "test_start": "2018-01-01",
+  "refit_days": 91,
+  "folds": [
+    {
+      "fold": 1,
+      "trained through": "2018-01-01",
+      "first origin": "2018-01-01",
+      "last target": "2018-04-08",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 2,
+      "trained through": "2018-04-02",
+      "first origin": "2018-04-02",
+      "last target": "2018-07-08",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 3,
+      "trained through": "2018-07-02",
+      "first origin": "2018-07-02",
+      "last target": "2018-10-07",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 4,
+      "trained through": "2018-10-01",
+      "first origin": "2018-10-01",
+      "last target": "2019-01-06",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 5,
+      "trained through": "2018-12-31",
+      "first origin": "2018-12-31",
+      "last target": "2019-04-07",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 6,
+      "trained through": "2019-04-01",
+      "first origin": "2019-04-01",
+      "last target": "2019-07-07",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 7,
+      "trained through": "2019-07-01",
+      "first origin": "2019-07-01",
+      "last target": "2019-10-06",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 8,
+      "trained through": "2019-09-30",
+      "first origin": "2019-09-30",
+      "last target": "2020-01-05",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 9,
+      "trained through": "2019-12-30",
+      "first origin": "2019-12-30",
+      "last target": "2020-04-05",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 10,
+      "trained through": "2020-03-30",
+      "first origin": "2020-03-30",
+      "last target": "2020-07-05",
+      "origins": 364,
+      "forecasts": 61152
+    },
+    {
+      "fold": 11,
+      "trained through": "2020-06-29",
+      "first origin": "2020-06-29",
+      "last target": "2020-09-30",
+      "origins": 348,
+      "forecasts": 58464
+    }
+  ],
+  "overall": {
+    "persistence": {
+      "mae": 2004.203103357692,
+      "rmse": 2522.425020179281,
+      "mape": 16.057962400603817,
+      "bias": 100.452240650523,
+      "bias_pct": 0.7852387781449985,
+      "n": 669984
+    },
+    "seasonal_naive": {
+      "mae": 526.0642358623489,
+      "rmse": 801.8800479012176,
+      "mape": 4.132727778264692,
+      "bias": 4.96265433204375,
+      "bias_pct": 0.03879324740607197,
+      "n": 669984
+    },
+    "hour_of_week": {
+      "mae": 559.3872738005683,
+      "rmse": 800.7233638183816,
+      "mape": 4.3819441516082085,
+      "bias": 20.379294505540432,
+      "bias_pct": 0.15930567813475982,
+      "n": 669984
+    },
+    "fourier": {
+      "mae": 707.1636700538861,
+      "rmse": 985.6533874537912,
+      "mape": 5.778358036754582,
+      "bias": 251.93445444423625,
+      "bias_pct": 1.9693806917525327,
+      "n": 669984
+    },
+    "lgbm": {
+      "mae": 445.88801053836966,
+      "rmse": 645.5080952025186,
+      "mape": 3.5552534229988635,
+      "bias": 84.11231735542145,
+      "bias_pct": 0.6575090100468717,
+      "n": 669984
+    }
+  },
+  "coverage80": 76.0364107011458,
+  "interval_width80": 1214.8484317503253,
+  "build_seconds": 149.0,
+  "fast": false
+}
