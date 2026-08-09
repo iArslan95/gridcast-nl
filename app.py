@@ -141,8 +141,22 @@ def note(text: str, warn: bool = False) -> None:
 
 
 # ---------------------------------------------------------------- loading ---
+def fp(name: str) -> str:
+    """Fingerprint of a parquet file: size and modification time.
+
+    Every cached function that reads a file takes this as an argument, so the
+    cache key changes when the file does. Without it a deploy that ships new
+    artifacts into a process that is only reloaded, not restarted, keeps
+    serving the previous build's frames: the code expects a column the cached
+    DataFrame has never heard of, and the app dies on a KeyError that looks
+    like a data bug and is not one.
+    """
+    s = (DATA / name).stat()
+    return f"{name}:{s.st_size}:{int(s.st_mtime)}"
+
+
 @st.cache_data(show_spinner="Backtest inlezen…")
-def load_backtest() -> pd.DataFrame:
+def _backtest(fingerprint: str) -> pd.DataFrame:
     bt = pd.read_parquet(DATA / "backtest.parquet")
     local = bt["target"].dt.tz_convert(TZ)
     bt["uur"] = local.dt.hour
@@ -157,8 +171,12 @@ def load_backtest() -> pd.DataFrame:
     return bt
 
 
+def load_backtest() -> pd.DataFrame:
+    return _backtest(fp("backtest.parquet"))
+
+
 @st.cache_data
-def load_series() -> pd.DataFrame:
+def _series(fingerprint: str) -> pd.DataFrame:
     s = pd.read_parquet(DATA / "series.parquet")
     s = s.rename(columns={s.columns[0]: "utc_timestamp"})
     s["local"] = s["utc_timestamp"].dt.tz_convert(TZ)
@@ -174,24 +192,35 @@ def load_series() -> pd.DataFrame:
     return s
 
 
+def load_series() -> pd.DataFrame:
+    return _series(fp("series.parquet"))
+
+
 @st.cache_data
-def load_meta() -> dict:
+def _meta(fingerprint: str) -> dict:
     return json.loads((DATA / "meta.json").read_text(encoding="utf-8"))
 
 
+def load_meta() -> dict:
+    return _meta(fp("meta.json"))
+
+
 @st.cache_data
+def _parquet(fingerprint: str) -> pd.DataFrame:
+    name = fingerprint.split(":", 1)[0]
+    return pd.read_parquet(DATA / name)
+
+
 def load_monthly_levels() -> pd.DataFrame:
-    return pd.read_parquet(DATA / "monthly_levels.parquet")
+    return _parquet(fp("monthly_levels.parquet"))
 
 
-@st.cache_data
 def load_quantiles() -> pd.DataFrame:
-    return pd.read_parquet(DATA / "residual_quantiles.parquet")
+    return _parquet(fp("residual_quantiles.parquet"))
 
 
-@st.cache_data
 def load_capaciteit() -> pd.DataFrame:
-    return pd.read_parquet(DATA / "capaciteit.parquet")
+    return _parquet(fp("capaciteit.parquet"))
 
 
 def mape(y, p) -> float:
@@ -200,7 +229,7 @@ def mape(y, p) -> float:
 
 
 @st.cache_data
-def by_horizon(_v: str = "2") -> pd.DataFrame:
+def _by_horizon(fingerprint: str) -> pd.DataFrame:
     bt = load_backtest()
     rows = []
     for h, d in bt.groupby("h"):
@@ -216,8 +245,12 @@ def by_horizon(_v: str = "2") -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def by_horizon() -> pd.DataFrame:
+    return _by_horizon(fp("backtest.parquet"))
+
+
 @st.cache_data
-def by_week(_v: str = "2") -> pd.DataFrame:
+def _by_week(fingerprint: str) -> pd.DataFrame:
     bt = load_backtest()
     return pd.DataFrame([
         {"week": wk,
@@ -227,8 +260,12 @@ def by_week(_v: str = "2") -> pd.DataFrame:
         for wk, d in bt.groupby("week")])
 
 
+def by_week() -> pd.DataFrame:
+    return _by_week(fp("backtest.parquet"))
+
+
 @st.cache_data
-def by_segment(column: str) -> pd.DataFrame:
+def _by_segment(column: str, fingerprint: str) -> pd.DataFrame:
     bt = load_backtest()
     rows = []
     for key, d in bt.groupby(column):
@@ -239,8 +276,12 @@ def by_segment(column: str) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("uren", ascending=False)
 
 
+def by_segment(column: str) -> pd.DataFrame:
+    return _by_segment(column, fp("backtest.parquet"))
+
+
 @st.cache_data
-def by_hour_of_day(_v: str = "2") -> pd.DataFrame:
+def _by_hour_of_day(fingerprint: str) -> pd.DataFrame:
     bt = load_backtest()
     return pd.DataFrame([
         {"uur": int(u),
@@ -250,8 +291,12 @@ def by_hour_of_day(_v: str = "2") -> pd.DataFrame:
         for u, d in bt.groupby("uur")])
 
 
+def by_hour_of_day() -> pd.DataFrame:
+    return _by_hour_of_day(fp("backtest.parquet"))
+
+
 @st.cache_data
-def exceedance(h: int, capacity: float) -> pd.DataFrame:
+def _exceedance(h: int, capacity: float, fingerprint: str) -> pd.DataFrame:
     """Turn each point forecast into a probability that the limit is passed.
 
     P(y > C) = P(residual > C - forecast), read from the empirical residual
@@ -274,6 +319,10 @@ def exceedance(h: int, capacity: float) -> pd.DataFrame:
     d["kans"] = kans
     d["overschreden"] = d["y"] > capacity
     return d
+
+
+def exceedance(h: int, capacity: float) -> pd.DataFrame:
+    return _exceedance(h, capacity, fp("backtest.parquet"))
 
 
 def alarm_stats(d: pd.DataFrame, alarm: np.ndarray) -> dict:
