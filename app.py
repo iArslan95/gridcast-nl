@@ -816,33 +816,50 @@ elif sectie == "Voorspellen per segment":
         "Van één uur tot een week vooruit, alle modellen op dezelfde uren "
         "gescoord.")
     h = by_horizon()
+    # Each horizon lands on exactly four clock hours (origins run 00/06/12/18
+    # UTC) and that set shifts with h. Because the error depends heavily on the
+    # time of day, the raw per-h line carries a period-six sawtooth that is
+    # sampling, not signal. Six consecutive horizons cover every clock-hour mix
+    # exactly once, so a six-wide average removes the artefact exactly.
+    glad = h.copy()
+    for c in glad.columns:
+        if c != "h":
+            glad[c] = h[c].rolling(6, center=True, min_periods=1).mean()
     fig = go.Figure()
+    fig.add_trace(go.Scatter(x=h["h"], y=h["mape_lgbm"], name="per losse horizon",
+                             mode="lines",
+                             line=dict(color="#c7d2fe", width=1.0)))
     for m in MODELS:
-        fig.add_trace(go.Scatter(x=h["h"], y=h[f"mape_{m}"], name=NAMES[m],
+        fig.add_trace(go.Scatter(x=glad["h"], y=glad[f"mape_{m}"], name=NAMES[m],
                                  mode="lines", line=dict(**STYLE[m])))
     fig = layout(fig, "MAPE (%)", "horizon h (uren vooruit)", 340)
     fig.update_xaxes(dtick=24)
     st.plotly_chart(fig, **WIDE)
     note(
-        f"Het model loopt van {nl(h['mape_lgbm'].iloc[0], 2)}% één uur vooruit "
-        f"naar {nl(h['mape_lgbm'].iloc[-1], 2)}% een week vooruit. Dat is een "
-        "kleine stijging, en het is het interessantste resultaat hier: op "
-        "landelijk niveau is een week vooruit nauwelijks moeilijker dan een uur "
-        "vooruit, omdat vrijwel alle informatie kalendervorm is die op beide "
-        "momenten even goed bekend is. Seizoensnaief gebruikt op elke horizon "
-        "dezelfde waarde en het Fourier-model gebruikt helemaal geen recente "
-        "belasting, dus die twee hebben niets te verliezen en lopen vlak. Alleen "
-        "het geboosterde model houdt recente informatie vast, en alleen dat "
-        "heeft een lijn die loopt.<br><br>"
-        "De voorspellingen worden om 00, 06, 12 en 18 UTC uitgegeven en niet één "
-        "keer per dag. Bij één dagelijkse origin zou h = 24, 48 tot en met 168 "
-        "allemaal op middernacht landen, het rustigste uur van de dag, en dan "
-        "meet deze grafiek de klok in plaats van de horizon.")
+        f"Het model loopt van {nl(glad['mape_lgbm'].iloc[0], 2)}% één uur "
+        f"vooruit naar {nl(glad['mape_lgbm'].iloc[-1], 2)}% een week vooruit. "
+        "Dat is een kleine stijging, en het is het interessantste resultaat "
+        "hier: op landelijk niveau is een week vooruit nauwelijks moeilijker "
+        "dan een uur vooruit, omdat vrijwel alle informatie kalendervorm is "
+        "die op beide momenten even goed bekend is. Seizoensnaief gebruikt op "
+        "elke horizon dezelfde waarde en het Fourier-model gebruikt helemaal "
+        "geen recente belasting, dus die twee hebben niets te verliezen en "
+        "lopen vlak. Alleen het geboosterde model houdt recente informatie "
+        "vast, en alleen dat heeft een lijn die loopt.<br><br>"
+        "Over de lichte lijn: per losse horizon zaagtandt de meting met "
+        "periode zes. Dat is geen modelgedrag maar bemonstering. De "
+        "voorspellingen worden om 00, 06, 12 en 18 UTC afgegeven, dus elke "
+        "horizon landt op vier kloktijden en die set verschuift met h, terwijl "
+        "de vorige grafiek liet zien dat de fout sterk van het uur van de dag "
+        "afhangt. Zes opeenvolgende horizonnen dekken elke kloktijdmix precies "
+        "één keer, dus de dikke lijnen middelen over zes horizonnen: dat "
+        "verwijdert het artefact exact, zonder iets glad te strijken dat echt "
+        "is.")
 
     sub("Bias, apart gehouden van accuratesse")
     fig = go.Figure()
     for m in MODELS:
-        fig.add_trace(go.Scatter(x=h["h"], y=h[f"bias_{m}"], name=NAMES[m],
+        fig.add_trace(go.Scatter(x=glad["h"], y=glad[f"bias_{m}"], name=NAMES[m],
                                  mode="lines", line=dict(**STYLE[m])))
     fig.add_hline(y=0, line=dict(color="#a8a29e", width=1))
     fig = layout(fig, "gemiddelde fout (MW), positief = te hoog",
@@ -855,7 +872,8 @@ elif sectie == "Voorspellen per segment":
          "een systematisch tekort, en dat repareer je in het model.")
 
     sub("Betekenen de intervallen wat ze beweren?")
-    fig = go.Figure(go.Scatter(x=h["h"], y=h["dekking"], name="werkelijke dekking",
+    fig = go.Figure(go.Scatter(x=glad["h"], y=glad["dekking"],
+                               name="werkelijke dekking",
                                mode="lines", line=dict(color=ACCENT, width=2.8)))
     fig.add_hline(y=80, line=dict(color=WARM, width=1.6, dash="dash"),
                   annotation_text="80% nominaal", annotation_position="top left")
