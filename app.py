@@ -20,6 +20,12 @@ import streamlit as st
 st.set_page_config(page_title="GridCast — Dutch load forecasting",
                    page_icon="⚡", layout="wide")
 
+# Streamlit replaced use_container_width with width="stretch" in 1.49. The host
+# resolves its own Streamlit version, so pick the spelling that exists rather
+# than pinning the whole app to one side of that change.
+_VERSION = tuple(int(p) for p in st.__version__.split(".")[:2])
+WIDE = {"width": "stretch"} if _VERSION >= (1, 49) else {"use_container_width": True}
+
 DATA = pathlib.Path(__file__).parent / "data" / "processed"
 TZ = "Europe/Amsterdam"
 ACCENT = "#4338ca"
@@ -232,7 +238,7 @@ with tab1:
             opacity=1.0 if excluded else 0.45))
     fig = layout(fig, "mean load (MW)", "calendar month")
     fig.update_xaxes(tickmode="linear", dtick=1)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
     st.markdown("""
     <div class="note">
     Every month of 2015 (amber) sits 1.7 to 2.0 GW below the same month of every
@@ -260,7 +266,7 @@ with tab1:
                                  mode="lines", line=dict(width=2.4, color=color)))
     fig = layout(fig, "mean load (MW)", "hour of day (local time)")
     fig.update_xaxes(dtick=3)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
     work = s[(s["dow"] < 5) & ~s["is_holiday"]]["load"].mean()
     hol = s[s["is_holiday"]]["load"].mean()
     st.markdown(f"""
@@ -289,7 +295,7 @@ with tab1:
                              name="2 °C bin mean"))
     fig = layout(fig, "daily mean load (MW)", "daily mean temperature (°C)")
     fig.update_layout(hovermode="closest")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
     st.markdown("""
     <div class="note">
     Clear and U-shaped: heating below roughly 15 °C, cooling above roughly 20 °C,
@@ -319,7 +325,7 @@ with tab1:
                          "bias MW": float(e.mean()),
                          "bias %": float(e.mean() / d["load"].mean() * 100)})
         st.dataframe(pd.DataFrame(rows).round(2), hide_index=True,
-                     use_container_width=True)
+                     **WIDE)
         st.markdown("""
         <div class="warn">
         A systematic error that runs about +5% for three years and then flips to
@@ -346,7 +352,7 @@ with tab2:
     being useless.
     """)
     folds = pd.DataFrame(meta["folds"])
-    st.dataframe(folds, hide_index=True, use_container_width=True)
+    st.dataframe(folds, hide_index=True, **WIDE)
     st.markdown("""
     <div class="note">
     Training rows stop a full 168 hours before each cut, not at the cut. An
@@ -369,7 +375,7 @@ with tab2:
             line=dict(color=sty["color"], width=sty["width"], dash=sty["dash"])))
     fig = layout(fig, "MAPE (%)", "horizon h (hours ahead)")
     fig.update_xaxes(dtick=24)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
     st.markdown(f"""
     <div class="note">
     The model runs from {h['mape_lgbm'].iloc[0]:.2f}% one hour out to
@@ -406,7 +412,7 @@ with tab2:
     fig = layout(fig, "mean error (MW), positive = forecast too high",
                  "horizon h (hours ahead)", height=320)
     fig.update_xaxes(dtick=24)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
     st.markdown("""
     <div class="note">
     Two models can share a MAE and mean completely different things. Errors
@@ -428,7 +434,7 @@ with tab2:
                  "horizon h (hours ahead)", height=320)
     fig.update_yaxes(range=[50, 95])
     fig.update_xaxes(dtick=24)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
     st.markdown(f"""
     <div class="warn">
     An 80% interval that contains {meta['coverage80']:.1f}% of realisations is
@@ -448,14 +454,14 @@ with tab2:
     with left:
         st.caption("MAPE by day type")
         st.dataframe(by_segment("segment").round(2), hide_index=True,
-                     use_container_width=True)
+                     **WIDE)
         st.caption("MAPE by season")
         st.dataframe(by_segment("season").round(2), hide_index=True,
-                     use_container_width=True)
+                     **WIDE)
     with right:
         st.caption("MAPE by time of day")
         st.dataframe(by_segment("period").round(2), hide_index=True,
-                     use_container_width=True)
+                     **WIDE)
         st.caption("MAPE by fold")
         bt = load_backtest()
         rows = []
@@ -465,7 +471,7 @@ with tab2:
                          "Gradient boosting": mape(d["y"], d["pred_lgbm"]),
                          "Seasonal naive": mape(d["y"], d["pred_seasonal_naive"])})
         st.dataframe(pd.DataFrame(rows).round(2), hide_index=True,
-                     use_container_width=True)
+                     **WIDE)
     st.markdown("""
     <div class="note">
     Public holidays are where the model is worth having: it roughly halves the
@@ -559,7 +565,7 @@ with tab3:
                                name="annual saving"))
     fig = layout(fig, "saving against seasonal naive (€/yr)",
                  "cost of under-forecasting ÷ cost of over-forecasting", height=320)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
     st.markdown(f"""
     <div class="note">
     The saving is not a fixed number, it moves with how asymmetric the cost is.
@@ -602,14 +608,14 @@ with tab4:
                   annotation_text=f"alert at {threshold:.1f}%",
                   annotation_position="top left")
     fig = layout(fig, "MAPE per week (%)", "week")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
 
     fig = go.Figure(go.Bar(x=wk["week"], y=wk["bias"],
                            marker_color=np.where(wk["bias"] > 0, ACCENT, "#b45309"),
                            name="weekly bias"))
     fig.add_hline(y=0, line=dict(color="#a8a29e", width=1))
     fig = layout(fig, "mean error per week (MW)", "week", height=280)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **WIDE)
 
     flagged = wk[wk["mape_lgbm"] > threshold]
     in_2020 = int((flagged["week"].dt.year == 2020).sum())
@@ -647,7 +653,7 @@ with tab4:
         .rename(columns={"mape_lgbm": "model MAPE %",
                          "mape_seasonal_naive": "seasonal naive MAPE %",
                          "bias": "bias MW", "coverage": "80% coverage %"})
-        .round(2), hide_index=True, use_container_width=True)
+        .round(2), hide_index=True, **WIDE)
 
 st.markdown("""
 <div class="footer">

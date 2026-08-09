@@ -1,5 +1,11 @@
-streamlit==1.41.1
-pandas==2.0.1
-numpy==1.26.4
-plotly==5.22.0
-pyarrow==18.1.0
+# Ranges, not exact pins, and deliberately so. Exact pins tie the install to
+# the Python version they were resolved against: pandas 2.0.1 has no wheels for
+# Python 3.12 or later, so a host that picks a newer interpreter than the one
+# this was built on falls back to a source build and the deploy dies. These
+# floors are the versions this was developed against; the ceilings keep a major
+# release from arriving unannounced.
+streamlit>=1.41,<2
+pandas>=2.0,<3
+numpy>=1.24,<3
+plotly>=5.22,<7
+pyarrow>=14
