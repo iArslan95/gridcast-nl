@@ -75,7 +75,10 @@ STATUS_VOLGORDE = ["Beschikbaar", "Beperkt beschikbaar",
 
 CSS = f"""
 <style>
-.block-container {{padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1480px;}}
+/* Deliberately no padding-top override. Streamlit reserves that space for its
+   own fixed toolbar, the reserved amount differs per version, and trimming it
+   put the first line of every section underneath the toolbar. */
+.block-container {{padding-bottom: 3rem; max-width: 1480px;}}
 [data-testid="stSidebar"] {{background: #ffffff; border-right: 1px solid {LINE};}}
 [data-testid="stSidebar"] .block-container {{padding-top: 1.6rem;}}
 .brand {{font-size: 1.28rem; font-weight: 700; color: {INK}; letter-spacing: -0.01em;}}
@@ -831,31 +834,81 @@ elif sectie == "Regio en congestie":
 
 # ------------------------------------------------------ waarde en besluit ---
 elif sectie == "Waarde en besluit":
-    kop("Van percentage naar keuze", "De vraag is niet hoe nauwkeurig, maar wat nu",
-        "Een netbeheerder vraagt zelden hoe nauwkeurig de voorspelling is. De "
-        "vraag is of een grens overschreden wordt, hoe zeker dat is, en hoe lang "
-        "van tevoren je het weet. Dat is een ander product dan een "
-        "puntvoorspelling: je hebt een kans nodig, en dus een verdeling.")
+    kop("Beslissen met een grens", "Zie je het op tijd aankomen?",
+        "Een netbeheerder vraagt zelden hoe nauwkeurig een voorspelling is. De "
+        "vraag is of een grens overschreden wordt, hoe zeker dat is, en of je "
+        "er nog iets aan kunt doen. Deze pagina zet de voorspelling om in dat "
+        "besluit.")
+
+    note(
+        "<b>Lees het als een dienstrooster.</b> Stel je een voedingsgebied voor "
+        "dat een bepaald vermogen aankan. Elke dag draait het model, en soms "
+        "zegt het: morgen om vijf uur wordt het krap. Dan stuur je iemand, of je "
+        "belt een klant om terug te schakelen. Dat kost geld, dus je wilt niet "
+        "voor elk klein risico uitrukken; maar een overschrijding missen kost "
+        "meer.<br><br>"
+        "Hieronder kies je drie dingen: hoe ver vooruit je kijkt, waar de grens "
+        "ligt, en vanaf welke kans je in actie komt. De app rekent daarna op de "
+        "echte backtest uit wat die keuze had opgeleverd: hoeveel "
+        "overschrijdingen je had zien aankomen, hoeveel je had gemist, en hoe "
+        "vaak je voor niets was uitgerukt.")
 
     k1, k2, k3 = st.columns(3)
-    lead = k1.selectbox("Aanlooptijd", [24, 48, 72, 168], index=0,
+    lead = k1.selectbox("Hoe ver vooruit kijk je?", [24, 48, 72, 168], index=0,
                         format_func=lambda x: f"{x} uur ({x // 24} dag"
                                               + ("en)" if x // 24 > 1 else ")"))
     bt = load_backtest()
     y_lead = bt.loc[bt["h"] == lead, "y"]
-    grens = k2.slider("Capaciteitsgrens (MW)",
+    grens = k2.slider("Wat kan het gebied aan? (MW)",
                       int(y_lead.quantile(0.80) // 100 * 100),
                       int(y_lead.max() // 100 * 100),
                       int(y_lead.quantile(0.95) // 100 * 100), step=100)
+    drempel = k3.slider("Vanaf welke kans kom je in actie?", 5, 95, 30, 5,
+                        format="%d%%")
     d = exceedance(lead, float(grens))
-    k3.metric("Overschrijdingsuren in de backtest",
-              f"{int(d['overschreden'].sum())} van {nl(len(d))}",
-              nl(d["overschreden"].mean() * 100, 1) + "% van de uren",
-              delta_color="off")
+    nu = alarm_stats(d, (d["kans"] >= drempel / 100).to_numpy())
+    n_over = int(d["overschreden"].sum())
+    maanden = (d["target"].max() - d["target"].min()).days / 30.44
 
-    sub("Wat elke alarmdrempel je oplevert",
-        "Elk punt op de lijn is een keuze: meer overschrijdingen vangen kost "
-        "meer loze interventies.")
+    sub("Wat die keuze had opgeleverd",
+        f"Over {nl(maanden, 0)} maanden backtest, waarin de grens "
+        f"{nl(n_over)} keer werd overschreden.")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Op tijd gezien", nl(nu["raak"]),
+              nl(nu["recall"], 0) + "% van alle overschrijdingen",
+              delta_color="off")
+    m2.metric("Gemist", nl(nu["gemist"]),
+              nl(100 - nu["recall"], 0) + "% van alle overschrijdingen",
+              delta_color="off")
+    m3.metric("Vals alarm", nl(nu["vals"]),
+              nl(nu["vals_pm"], 1) + " keer per maand", delta_color="off")
+    m4.metric("Raak als je uitrukt", nl(nu["precisie"], 0, "%"),
+              "van de alarmen was terecht", delta_color="off")
+
+    fig = go.Figure(go.Bar(
+        x=[nu["raak"], nu["gemist"], nu["vals"]],
+        y=["op tijd gezien", "gemist", "vals alarm"], orientation="h",
+        marker_color=["#15803d", "#b91c1c", "#a8a29e"],
+        text=[nl(nu["raak"]), nl(nu["gemist"]), nl(nu["vals"])],
+        textposition="outside",
+        hovertemplate="%{y}: %{x} uren<extra></extra>"))
+    fig = layout(fig, "", "aantal uren in de backtest", 240, legend=False)
+    st.plotly_chart(fig, **WIDE)
+    note(
+        f"Met een drempel van {drempel}% ruk je uit zodra het model de kans op "
+        f"overschrijding hoger inschat dan {drempel} op 100. Dat levert "
+        f"{nl(nu['raak'])} van de {nl(n_over)} overschrijdingen op tijd op, "
+        f"{nl(nu['gemist'])} glippen er doorheen, en je gaat "
+        f"{nl(nu['vals_pm'], 1)} keer per maand voor niets. Zet de drempel lager "
+        "en je mist minder maar rukt vaker voor niets uit; zet hem hoger en het "
+        "omgekeerde. Er is geen goed antwoord zonder te weten wat een gemiste "
+        "overschrijding kost tegenover een loze rit, en dat is een gesprek met "
+        "de operatie en niet met de modelleur.")
+
+    sub("Alle drempels tegelijk, en waarom een kans beter is dan een getal",
+        "Elk punt op de lijn is één drempelinstelling. Rechtsboven is alles "
+        "vangen tegen veel loos alarm, linksonder is bijna nooit uitrukken en "
+        "veel missen.")
     drempels = np.round(np.arange(0.02, 0.99, 0.02), 2)
     curve = [alarm_stats(d, (d["kans"] >= t).to_numpy()) for t in drempels]
     punt = alarm_stats(d, (d["pred_lgbm"] > grens).to_numpy())
@@ -863,31 +916,42 @@ elif sectie == "Waarde en besluit":
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=[c["vals_pm"] for c in curve], y=[c["recall"] for c in curve],
-        mode="lines", name="kansdrempel", line=dict(color=ACCENT, width=2.8),
-        text=[f"drempel {t:.2f}".replace(".", ",") for t in drempels],
+        mode="lines", name="alle kansdrempels", line=dict(color=ACCENT, width=2.8),
+        text=[f"drempel {int(t * 100)}%" for t in drempels],
         hovertemplate="%{text}<br>%{y:.0f}% gevonden"
                       "<br>%{x:.1f} vals alarm per maand<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=[nu["vals_pm"]], y=[nu["recall"]], mode="markers",
+        name=f"jouw keuze: {drempel}%",
+        marker=dict(size=17, color=ACCENT, symbol="circle",
+                    line=dict(width=2.5, color="#ffffff"))))
     fig.add_trace(go.Scatter(x=[punt["vals_pm"]], y=[punt["recall"]], mode="markers",
-                             name="regel: puntvoorspelling boven de grens",
+                             name="zonder kans: alarm als de voorspelling boven de grens ligt",
                              marker=dict(size=14, color=WARM, symbol="diamond")))
     fig.add_trace(go.Scatter(x=[naief["vals_pm"]], y=[naief["recall"]], mode="markers",
-                             name="regel: seizoensnaief boven de grens",
+                             name="idem, maar met seizoensnaief",
                              marker=dict(size=11, color="#a8a29e", symbol="square")))
-    fig = layout(fig, "aandeel overschrijdingen gevonden (%)",
+    fig = layout(fig, "aandeel overschrijdingen op tijd gezien (%)",
                  "vals alarm per maand", 380)
     fig.update_layout(hovermode="closest")
     st.plotly_chart(fig, **WIDE)
     note(
-        "De puntvoorspelling geeft je één punt op deze grafiek en verder niets. "
-        f"Bij de gekozen grens vindt de regel \"voorspelling boven de grens\" "
-        f"{nl(punt['recall'], 0)}% van de overschrijdingen bij "
-        f"{nl(punt['vals_pm'], 1)} vals alarm per maand. De kansdrempel geeft je "
-        "de hele curve, zodat je zelf kiest waar je gaat zitten, en dat is een "
-        "gesprek met de operatie en niet met de modelleur.")
+        "Hier zit het hele punt van deze pagina. Wie alleen een puntvoorspelling "
+        "heeft, kan maar één regel maken: alarm als het voorspelde getal boven de "
+        f"grens ligt. Dat is de ruit, en die vindt {nl(punt['recall'], 0)}% van de "
+        f"overschrijdingen bij {nl(punt['vals_pm'], 1)} vals alarm per maand. Je "
+        "zit vast aan dat ene punt. Met een kans in plaats van een getal krijg je "
+        "de hele lijn, en dan kies je zelf of je liever niets mist of liever niet "
+        "voor niets uitrukt. Dezelfde regel op basis van seizoensnaief staat er "
+        "als vierkant naast, zodat zichtbaar blijft wat het model daadwerkelijk "
+        "toevoegt.")
 
-    sub("Klopt die kans ook?",
-        "Voorspelde kans tegen het werkelijke aandeel overschrijdingen. De stip "
-        "wordt groter naarmate er meer uren in die klasse vallen.")
+    sub("Klopt die kans eigenlijk wel?",
+        "Neem alle uren waarvan het model zei \"30% kans\". Als het model deugt, "
+        "ging het in ongeveer 30 van de 100 van die uren ook echt mis. Dat is "
+        "wat deze grafiek nakijkt: voorspelde kans op de horizontale as, het "
+        "werkelijke aandeel op de verticale. Op de streepjeslijn klopt de kans "
+        "precies; eronder belooft het model meer zekerheid dan het waarmaakt.")
     kal = d.groupby(pd.cut(d["kans"], np.arange(0, 1.05, 0.1)),
                     observed=True).agg(voorspeld=("kans", "mean"),
                                        werkelijk=("overschreden", "mean"),

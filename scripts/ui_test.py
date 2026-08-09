@@ -24,7 +24,7 @@ SECTIES = ["Overzicht", "Patronen in de vraag", "Voorspellen per segment",
 # regression the eye would miss.
 CHARTS = {"Overzicht": 0, "Patronen in de vraag": 6,
           "Voorspellen per segment": 4, "Regio en congestie": 2,
-          "Waarde en besluit": 2, "Monitoring": 2}
+          "Waarde en besluit": 3, "Monitoring": 2}
 
 
 def run(at: AppTest, sectie: str) -> AppTest:
