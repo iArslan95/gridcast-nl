@@ -146,6 +146,11 @@ def main() -> int:
     print(f"  {cap_summary['gebieden']} supply areas, "
           f"{cap_summary['tekort_pct']:.0f}% in shortage", flush=True)
 
+    # What the final retrain's model actually leans on. Gain-based, so
+    # correlated features share credit; the app says so next to the chart.
+    final = model.GradientBoosting().fit(series, folds[-1].cut_pos)
+    final.importances().to_parquet(OUT / "importances.parquet", index=False)
+
     rq = residual_distribution(bt)
     rq["resid"] = rq["resid"].astype("float32")
     rq.to_parquet(OUT / "residual_quantiles.parquet", index=False)

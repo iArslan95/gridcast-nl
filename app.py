@@ -223,6 +223,10 @@ def load_capaciteit() -> pd.DataFrame:
     return _parquet(fp("capaciteit.parquet"))
 
 
+def load_importances() -> pd.DataFrame:
+    return _parquet(fp("importances.parquet"))
+
+
 def mape(y, p) -> float:
     y, p = np.asarray(y, float), np.asarray(p, float)
     return float(np.mean(np.abs((p - y) / y)) * 100)
@@ -365,8 +369,9 @@ reeks = meta["series"]
 cap_meta = meta.get("capaciteit", {})
 n_forecasts = int(sum(f["forecasts"] for f in meta["folds"]))
 
-SECTIES = ["Overzicht", "Patronen in de vraag", "Voorspellen per segment",
-           "Regio en congestie", "Waarde en besluit", "Monitoring"]
+SECTIES = ["Overzicht", "Patronen in de vraag", "De voorspelling zelf",
+           "Voorspellen per segment", "Regio en congestie", "Waarde en besluit",
+           "Monitoring"]
 
 with st.sidebar:
     st.markdown("<div class='brand'>⚡ Grid<span>Cast</span></div>"
@@ -629,6 +634,92 @@ elif sectie == "Patronen in de vraag":
              "kost een middag, en die stap overslaan is hoe een heel project "
              "verankerd raakt aan iets dat nooit vergelijkbaar was.", warn=True)
 
+# ------------------------------------------------------- forecast viewer ---
+elif sectie == "De voorspelling zelf":
+    kop("Van dichtbij", "Eén voorspelling, uur voor uur",
+        "Alles elders op deze site is een gemiddelde over honderdduizenden "
+        "voorspellingen. Dit is er één, precies zoals hij op het moment van "
+        "afgifte bestond: 168 uur vooruit, met de onzekerheidsband erbij, "
+        "afgezet tegen wat er daarna werkelijk gebeurde. Kies een rustige week "
+        "om te zien wat het model kan, en kies daarna maart 2020 om te zien "
+        "waar het ophoudt.")
+
+    bt = load_backtest()
+    PRESETS = {
+        "Gewone werkweek — mei 2019": "2019-05-13",
+        "Hemelvaartsweek — mei 2019": "2019-05-27",
+        "Kerstweek — december 2018": "2018-12-24",
+        "Eerste lockdownweek — maart 2020": "2020-03-16",
+        "Hittegolf — augustus 2020": "2020-08-07",
+    }
+    c1, c2 = st.columns([2, 1])
+    keuze = c1.selectbox("Kies een week", list(PRESETS) + ["Kies zelf een datum"])
+    cand = pd.DatetimeIndex(sorted(bt.loc[bt["origin"].dt.hour == 0,
+                                          "origin"].unique()))
+    if keuze == "Kies zelf een datum":
+        gekozen = c2.date_input("Afgiftedatum (00:00 UTC)",
+                                value=pd.Timestamp("2019-05-13").date(),
+                                min_value=cand.min().date(),
+                                max_value=cand.max().date())
+        doel = pd.Timestamp(gekozen, tz="UTC")
+    else:
+        doel = pd.Timestamp(PRESETS[keuze], tz="UTC")
+    o = cand[int(np.argmin(np.abs((cand - doel).to_numpy())))]
+    w = bt[bt["origin"] == o].sort_values("h")
+
+    heeft_band = w["lo80"].notna().any()
+    fig = go.Figure()
+    if heeft_band:
+        fig.add_trace(go.Scatter(x=w["target"], y=w["hi80"], mode="lines",
+                                 line=dict(width=0), showlegend=False,
+                                 hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=w["target"], y=w["lo80"], mode="lines",
+                                 line=dict(width=0), fill="tonexty",
+                                 fillcolor="rgba(67, 56, 202, 0.13)",
+                                 name="80%-band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=w["target"], y=w["pred_seasonal_naive"],
+                             name="seizoensnaief", mode="lines",
+                             line=dict(color="#a8a29e", width=1.3, dash="dot")))
+    fig.add_trace(go.Scatter(x=w["target"], y=w["y"], name="werkelijk",
+                             mode="lines", line=dict(color=INK, width=2.0)))
+    fig.add_trace(go.Scatter(x=w["target"], y=w["pred_lgbm"], name="voorspelling",
+                             mode="lines", line=dict(color=ACCENT, width=2.6)))
+    fig = layout(fig, "belasting (MW)", "", 420)
+    fig.add_annotation(x=w["target"].iloc[0], y=1.02, yref="paper",
+                       text="afgifte +1u", showarrow=False,
+                       font=dict(size=10, color=MUTED))
+    st.plotly_chart(fig, **WIDE)
+
+    m_w = mape(w["y"], w["pred_lgbm"])
+    m_sn = mape(w["y"], w["pred_seasonal_naive"])
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Afgegeven op", o.strftime("%d-%m-%Y %H:%M UTC"))
+    m2.metric("MAPE deze week", nl(m_w, 2, "%"),
+              nl(m_w - overall["lgbm"]["mape"], 2) + " pp t.o.v. gemiddeld",
+              delta_color="inverse")
+    m3.metric("Seizoensnaief deze week", nl(m_sn, 2, "%"),
+              "de baseline", delta_color="off")
+    if heeft_band:
+        dek = float(np.mean((w["y"] >= w["lo80"]) & (w["y"] <= w["hi80"])) * 100)
+        m4.metric("In de 80%-band", nl(dek, 0, "%"),
+                  "van deze 168 uren", delta_color="off")
+    else:
+        m4.metric("80%-band", "geen",
+                  "eerste fold: nog geen fouthistorie", delta_color="off")
+
+    note(
+        "Waar je op moet letten. In een gewone week zit vrijwel alle winst in "
+        "de <em>vorm</em>: het model raakt het dubbele piekpatroon van een "
+        "werkdag en de vlakke zaterdag, terwijl seizoensnaief elke afwijking "
+        "van vorige week letterlijk herhaalt, inclusief de fouten. In de "
+        "kerstweek zie je het model de feestdagen omzeilen waar de baseline er "
+        "vol in stapt. En in de lockdownweek van maart 2020 zie je beide het "
+        "spoor bijster: de werkelijkheid zakt onder alles wat het model ooit "
+        "geleerd heeft, de band houdt het niet, en precies dat moment is waar "
+        "de monitoringsectie over gaat. Eén voorspelling per keer bekijken is "
+        "geen bewijs, daarvoor zijn de andere secties; maar wie hier een paar "
+        "weken doorklikt, weet daarna wat die gemiddelden betekenen.")
+
 # ------------------------------------------------------ segment forecasts ---
 elif sectie == "Voorspellen per segment":
     kop("Backtest", "Eén gemiddelde verbergt precies wat je wilt weten",
@@ -750,6 +841,68 @@ elif sectie == "Voorspellen per segment":
         "op dat moment bestond er nog geen fout buiten de trainingsset om een "
         "breedte uit af te leiden, en er een lenen uit latere folds is in de "
         "toekomst kijken.", warn=True)
+
+    sub("Onder de motorkap",
+        "Wat de modellen zien, en waar het winnende model daadwerkelijk op "
+        "leunt.")
+    st.markdown("""
+| Model | Wat het ziet | Waarom het er is |
+|---|---|---|
+| **Seizoensnaief** | hetzelfde uur een week eerder | Op een reeks met zoveel weekstructuur een echte concurrent, geen stroman. Wat dit niet verslaat, verdient het niet om te draaien. |
+| **Seizoens-Fourier** | Fourier-termen voor dag-, week- en jaarcyclus, feestdagvlaggen, een trage trend; ridge op log-belasting, geen recente belasting | De zuivere kalenderblik. Zijn vlakke foutcurve geeft de helling van het geboosterde model betekenis. |
+| **Gradient boosting** | origin-lags tot 168 uur, voortschrijdende gemiddelden, hetzelfde uur één en twee weken vóór het doeluur, kalender, en de horizon zelf | Eén model voor alle 168 horizons met h als feature, zodat de foutcurve iets is dat het model produceert in plaats van iets dat de opzet oplegt. |
+
+Geen deep learning en geen Prophet: geen van beide verdient een plek op 41.640
+uurwaarnemingen, en allebei kosten ze het vermogen om een getal uit te leggen.
+    """)
+
+    imp = load_importances().copy()
+
+    def _groep(f: str) -> str:
+        if f.startswith(("sin_d", "cos_d")):
+            return "Fourier dagcyclus"
+        if f.startswith(("sin_w", "cos_w")):
+            return "Fourier weekcyclus"
+        if f.startswith(("sin_y", "cos_y")):
+            return "Fourier jaarcyclus"
+        return {
+            "tlag_168": "zelfde uur vorige week",
+            "tlag_336": "zelfde uur twee weken terug",
+            "is_holiday": "feestdagvlag",
+            "is_yearend": "jaarwisseling",
+            "is_weekend": "weekendvlag",
+            "hour": "uur van de dag", "dow": "dag van de week",
+            "doy": "dag van het jaar", "month": "maand",
+            "h": "horizon", "h_day": "horizon in dagen",
+            "oroll_24": "gemiddelde laatste 24 uur",
+            "oroll_168": "gemiddelde laatste week",
+            "odev_24_168": "recent niveau t.o.v. weekgemiddelde",
+        }.get(f, "belasting rond afgifte (lags)" if f.startswith("olag") else f)
+
+    imp["groep"] = imp["feature"].map(_groep)
+    top = (imp.groupby("groep")["gain"].sum()
+           .sort_values(ascending=True).tail(10))
+    top = top / top.sum() * 100
+    fig = go.Figure(go.Bar(
+        x=top.values, y=top.index, orientation="h",
+        marker_color=[ACCENT if g == "zelfde uur vorige week" else "#a8a29e"
+                      for g in top.index],
+        hovertemplate="%{y}: %{x:.1f}% van de gain<extra></extra>"))
+    fig = layout(fig, "", "aandeel in de gain van het model (%)", 340,
+                 legend=False)
+    st.plotly_chart(fig, **WIDE)
+    note(
+        "Het model leunt overweldigend op <b>hetzelfde uur vorige week</b>, "
+        "met de kalender en de feestdagvlag als correctie daarop. Dat is geen "
+        "zwakte maar de verklaring van de hele demo: het model is in essentie "
+        "een seizoensnaief die geleerd heeft wanneer vorige week de verkeerde "
+        "referentie is. Twee kanttekeningen horen erbij. Gain-importances "
+        "verdelen krediet willekeurig over gecorreleerde features, dus lees dit "
+        "als een rangorde en geen exacte verdeling. En de feestdagvlag is één "
+        "vlag voor alle feestdagen, terwijl de patronensectie laat zien dat "
+        "Goede Vrijdag zich totaal anders gedraagt dan eerste kerstdag; een "
+        "vlag per feestdag is de eerstvolgende verbetering die dit beeld "
+        "aanwijst.")
 
     with st.expander("De folds, en waarom er geen train/test-split in deze repo zit"):
         st.dataframe(pd.DataFrame(meta["folds"]).rename(columns={
@@ -1168,6 +1321,54 @@ elif sectie == "Monitoring":
         "zien aankomen. De keuze om weer weg te laten koopt een eerlijke horizon "
         "en kost precies dit, en een monitoringpagina die dat verstopte zou niets "
         "waard zijn.", warn=True)
+
+    sub("De grootste missers, stuk voor stuk",
+        "De acht dagen waarop de dag-vooruit voorspelling er gemiddeld het "
+        "verst naast zat, met erbij wat er die dag aan de hand was.")
+    bt = load_backtest()
+    s = load_series()
+    d24 = bt[bt["h"] == 24].copy()
+    d24["datum"] = d24["target"].dt.tz_convert(TZ).dt.date
+    per_dag = d24.groupby("datum").agg(
+        fout=("pred_lgbm", lambda x: 0.0), y=("y", "mean"),
+        p=("pred_lgbm", "mean")).reset_index()
+    per_dag["fout"] = per_dag["p"] - per_dag["y"]
+    abs_fout = (d24.assign(ae=(d24["pred_lgbm"] - d24["y"]).abs())
+                .groupby("datum")["ae"].mean())
+    per_dag["abs_fout"] = per_dag["datum"].map(abs_fout)
+    ctx = s.copy()
+    ctx["datum"] = ctx["local"].dt.date
+    per_ctx = ctx.groupby("datum").agg(
+        temp=("temp_c", "mean"),
+        feestdag=("holiday_name", lambda x: next((v for v in x if v), "")),
+        dagsoort=("dagsoort", "first")).reset_index()
+    ergste = (per_dag.merge(per_ctx, on="datum")
+              .nlargest(8, "abs_fout"))
+
+    def _context(r) -> str:
+        if r["feestdag"]:
+            return r["feestdag"]
+        dt = pd.Timestamp(r["datum"])
+        if pd.Timestamp("2020-03-15") <= dt <= pd.Timestamp("2020-06-01"):
+            return "lockdown"
+        if r["temp"] >= 22:
+            return f"hittegolf ({r['temp']:.0f} °C daggemiddeld)"
+        return r["dagsoort"]
+
+    ergste["wat er speelde"] = ergste.apply(_context, axis=1)
+    st.dataframe(
+        ergste.assign(datum=ergste["datum"].astype(str))
+        [["datum", "wat er speelde", "y", "p", "fout", "abs_fout"]]
+        .rename(columns={"y": "werkelijk MW", "p": "voorspeld MW",
+                         "fout": "bias MW", "abs_fout": "|fout| MW"})
+        .round(0), hide_index=True, **WIDE)
+    note(
+        "Geen van deze dagen is een raadsel, en dat is het punt. De missers "
+        "clusteren op drie verklaarbare situaties: de lockdownweken, de "
+        "hittegolf, en feestdagconstellaties die zelden in de trainingsdata "
+        "voorkomen. Een misser die je kunt benoemen is een werklijst; een "
+        "misser die nergens bij hoort is pas echt zorgwekkend. Deze tabel is "
+        "wat ik in productie elke maandag als eerste zou bekijken.")
 
     with st.expander("Weken boven de alarmdrempel"):
         st.dataframe(

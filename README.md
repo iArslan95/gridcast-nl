@@ -43,6 +43,13 @@ source, and a pandemic in the final folds.
   by season; which public holiday costs how much against a normal working day in
   the same month; and the temperature relation the model deliberately does not
   use.
+- **Shows single forecasts up close.** Pick a week — an ordinary one, Christmas,
+  the first lockdown week, the August 2020 heatwave — and see one 168-hour
+  forecast exactly as it was issued: point forecast, 80% band, actuals and the
+  seasonal-naive baseline, hour by hour.
+- **Opens the hood.** The model table, plus gain-based feature importances of
+  the final retrain: the model is essentially a seasonal naive that has learned
+  when last week is the wrong reference, and the chart says so.
 - **Scores the forecast on those same segments.** Day type, season, time of day,
   hour by hour and horizon by horizon, with the baseline beside every number,
   because a single headline MAPE mostly reports how good the model is at night.
@@ -69,8 +76,10 @@ source, and a pandemic in the final folds.
   seasonal-naive baseline, with under- and over-forecasting priced separately,
   plus the same fact with no price attached at all: 937 GWh of forecast error
   avoided per year at day-ahead.
-- **Monitors.** Weekly accuracy and bias with an alert threshold, and the
-  March 2020 break that trips it for 24 straight weeks.
+- **Monitors.** Weekly accuracy and bias with an alert threshold, the March
+  2020 break that trips it for 24 straight weeks, and an autopsy table of the
+  eight worst days with what was actually going on that day — every one of
+  them attributable to the lockdown, the heatwave or a rare holiday pattern.
 
 ## Results
 

@@ -18,12 +18,13 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-SECTIES = ["Overzicht", "Patronen in de vraag", "Voorspellen per segment",
-           "Regio en congestie", "Waarde en besluit", "Monitoring"]
+SECTIES = ["Overzicht", "Patronen in de vraag", "De voorspelling zelf",
+           "Voorspellen per segment", "Regio en congestie", "Waarde en besluit",
+           "Monitoring"]
 # Charts expected per section. A section that silently loses a chart is a
 # regression the eye would miss.
-CHARTS = {"Overzicht": 0, "Patronen in de vraag": 6,
-          "Voorspellen per segment": 4, "Regio en congestie": 2,
+CHARTS = {"Overzicht": 0, "Patronen in de vraag": 6, "De voorspelling zelf": 1,
+          "Voorspellen per segment": 5, "Regio en congestie": 2,
           "Waarde en besluit": 3, "Monitoring": 2}
 
 
@@ -48,6 +49,19 @@ def main():
 
     for sectie in SECTIES:
         run(at, sectie)
+
+    # The forecast viewer has to survive every preset, including the fold-1
+    # weeks that carry no interval, and a free date.
+    run(at, "De voorspelling zelf")
+    presets = at.selectbox[0].options
+    for p in presets:
+        at.selectbox[0].select(p)
+        at.run()
+        assert not at.exception, f"viewer raised on '{p}': {at.exception}"
+    at.selectbox[0].select("Kies zelf een datum")
+    at.run()
+    assert not at.exception, f"viewer raised on the free date: {at.exception}"
+    assert len(at.date_input) == 1, "free choice should show a date picker"
 
     # The capacity map has to survive a different operator and direction.
     run(at, "Regio en congestie")
