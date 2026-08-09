@@ -146,13 +146,16 @@ The demo is honest about its own edges, so here they are in one place.
   tail, since what a limit cares about is the top percent of hours. The decision
   tab is built for the second point on the data that exists; the first stays a
   caveat. The methods transfer, the numbers do not.
-- **Gross consumption is not net load.** With enough solar and wind, the
-  quantity that matters becomes demand minus generation, which ramps harder and
-  is driven by weather rather than by the calendar. In this dataset that
-  argument is weaker than expected: over 2019 the 99th percentile hourly ramp is
-  1,676 MW net against 1,694 MW gross, because Dutch renewables were still small
-  relative to load. That is exactly why a series ending in 2020 does not
-  describe the grid of today.
+- **Gross consumption is not net load — and the series itself proves the
+  transition is underway.** Measured national load is demand minus
+  behind-the-meter generation, and Dutch rooftop PV roughly quintupled over
+  this period. The error-by-hour chart shows the consequence: week-over-week
+  volatility at night is flat across five years (2.3% in 2016, 2.6% in 2020)
+  while midday explodes from 4.5% to over 10%, growing exactly in the daylight
+  hours. The forecast error no longer lives at the demand peaks; it lives at
+  midday, it grows every year, and no calendar feature catches it. Forecasting
+  this series today needs irradiance with its own error budget, and eventually
+  a net-load approach. A series ending in 2020 understates all of this.
 - **School holidays are missing.** They matter, and the historical Dutch tables
   are no longer publicly retrievable (the Rijksoverheid open-data endpoint
   returns 404, and the holiday sites now list 2026 onwards only). Inventing the

@@ -747,9 +747,10 @@ elif sectie == "Voorspellen per segment":
          "uit de vorm: een winterprofiel is scherper en regelmatiger, een "
          "zomerprofiel vlakker en gevoeliger voor weer dat het model niet ziet.")
 
-    sub("Per uur van de dag",
-        "De fout volgt de vraag: de uren met de meeste activiteit zijn de "
-        "moeilijkste.")
+    sub("Per uur van de dag, en waarom de middag het probleem is",
+        "Niet de piekuren van de vraag zijn het moeilijkst, maar het dal "
+        "ertussen. Dat is geen toeval, en het is de interessantste vondst van "
+        "deze pagina.")
     hod = by_hour_of_day()
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=hod["uur"], y=hod["Seizoensnaief"],
@@ -758,14 +759,7 @@ elif sectie == "Voorspellen per segment":
     fig.add_trace(go.Scatter(x=hod["uur"], y=hod["Gradient boosting"],
                              name="Gradient boosting", mode="lines",
                              line=dict(color=ACCENT, width=2.8)))
-    fig.add_trace(go.Scatter(x=hod["uur"], y=hod["belasting"], name="belasting",
-                             mode="lines", yaxis="y2",
-                             line=dict(color="#d6d3d1", width=1.4, dash="dot")))
-    fig = layout(fig, "MAPE (%)", "uur van de dag (lokale tijd)", 340)
-    fig.update_layout(yaxis2=dict(title="gemiddelde belasting (MW)",
-                                  overlaying="y", side="right",
-                                  showgrid=False, title_font=dict(color="#a8a29e"),
-                                  tickfont=dict(color="#a8a29e")))
+    fig = layout(fig, "MAPE (%)", "uur van de dag (lokale tijd)", 320)
     fig.update_xaxes(dtick=2)
     st.plotly_chart(fig, **WIDE)
     beste, slechtste = hod.loc[hod["Gradient boosting"].idxmin()], \
@@ -774,9 +768,49 @@ elif sectie == "Voorspellen per segment":
         f"Het beste uur is {int(beste['uur'])}:00 met "
         f"{nl(beste['Gradient boosting'], 2)}%, het slechtste "
         f"{int(slechtste['uur'])}:00 met {nl(slechtste['Gradient boosting'], 2)}%, "
-        "ruim twee keer zoveel. De stippellijn is de gemiddelde belasting: de "
-        "fout loopt mee met de activiteit. Wie één kop-MAPE rapporteert, "
-        "rapporteert dus vooral hoe goed het model 's nachts is.")
+        "bijna drie keer zoveel. Let op wáár die piek zit: niet op de "
+        "ochtend- of avondpiek van de vraag, maar rond het middaguur, precies "
+        "in het vraagdal ertussen. De fout volgt dus niet de drukte. Ook "
+        "seizoensnaief piekt daar, dus dit is geen modelfout maar een "
+        "eigenschap van de reeks zelf: middaguren zijn van week op week het "
+        "grilligst. De grafiek hieronder laat zien waarom.")
+
+    s_vol = load_series()
+    s_vol = s_vol.set_index(pd.DatetimeIndex(s_vol["utc_timestamp"]))
+    sn_ape = (s_vol["load"] - s_vol["load"].shift(168)).abs() / s_vol["load"] * 100
+    vol = pd.DataFrame({"uur": s_vol["uur"], "jaar": s_vol["jaar"],
+                        "ape": sn_ape}).dropna()
+    fig = go.Figure()
+    for jaar, kleur, breedte in [(2016, "#d6d3d1", 1.6), (2018, "#a8a29e", 1.6),
+                                 (2020, WARM, 2.8)]:
+        prof = vol[vol["jaar"] == jaar].groupby("uur")["ape"].mean()
+        fig.add_trace(go.Scatter(x=prof.index, y=prof.values, name=str(jaar),
+                                 mode="lines", line=dict(color=kleur,
+                                                         width=breedte)))
+    fig = layout(fig, "week-op-week verschil (% van de belasting)",
+                 "uur van de dag (lokale tijd)", 320)
+    fig.update_xaxes(dtick=2)
+    st.plotly_chart(fig, **WIDE)
+    note(
+        "Dit is dezelfde meting, hoe veel een uur afwijkt van hetzelfde uur "
+        "een week eerder, per jaar getekend. De nacht is in vijf jaar niets "
+        "veranderd: 2,3% in 2016, 2,6% in 2020. De middag is ontploft: van "
+        "4,5% in 2016 via 6,5% in 2019 naar ruim 10% in 2020, en de groei zit "
+        "exact in de daglichturen. Dat is <b>zon op dak</b>. De gemeten "
+        "landelijke belasting is verbruik mínus eigen opwek achter de meter, "
+        "het Nederlandse zonvermogen is in deze periode ruwweg vervijfvoudigd, "
+        "en daarmee werd het middaguur weersafhankelijk: een bewolkte week na "
+        "een zonnige maakt \"zelfde uur vorige week\" waardeloos. 2020 wordt "
+        "extra aangezet door de lockdown, maar de trend loopt al van 2016 tot "
+        "en met 2019 monotoon op.<br><br>"
+        "Voor een netbeheerder is dit de kern: de fout zit niet meer bij de "
+        "vraagpieken maar bij de opwek, hij groeit elk jaar, en geen enkele "
+        "kalenderfeature vangt hem. Wie deze reeks vandaag serieus wil "
+        "voorspellen heeft instraling nodig, met een eigen foutenbegroting "
+        "voor de instralingsverwachting, en uiteindelijk een aparte "
+        "netto-belastingaanpak. Dat staat in de README als de eerlijke grens "
+        "van deze demo, en deze twee grafieken zijn het bewijs dat die grens "
+        "geen formaliteit is.")
 
     sub("Per horizon",
         "Van één uur tot een week vooruit, alle modellen op dezelfde uren "

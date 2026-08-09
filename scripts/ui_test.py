@@ -24,7 +24,7 @@ SECTIES = ["Overzicht", "Patronen in de vraag", "De voorspelling zelf",
 # Charts expected per section. A section that silently loses a chart is a
 # regression the eye would miss.
 CHARTS = {"Overzicht": 0, "Patronen in de vraag": 6, "De voorspelling zelf": 1,
-          "Voorspellen per segment": 5, "Regio en congestie": 2,
+          "Voorspellen per segment": 6, "Regio en congestie": 2,
           "Waarde en besluit": 3, "Monitoring": 2}
 
 
