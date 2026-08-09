@@ -1,5 +1,6 @@
 # ⚡ GridCast — Dutch Electricity Load Forecasting
 
+![tests](https://github.com/iArslan95/gridcast-nl/actions/workflows/tests.yml/badge.svg)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![LightGBM](https://img.shields.io/badge/LightGBM-gradient%20boosting-green)
 ![Streamlit](https://img.shields.io/badge/Streamlit-app-red)
@@ -223,6 +224,11 @@ python -m pytest tests -q     # 13 tests: leakage, lag arithmetic, metrics
 python scripts/selftest.py    # invariants over the committed backtest
 python scripts/ui_test.py     # headless UI test (streamlit.testing)
 ```
+
+All three run in CI on every push (`.github/workflows/tests.yml`), on the same
+requirements the deployed app installs, so a change that breaks the backtest's
+guarantees or crashes a section of the app fails the build before it reaches
+the live demo.
 
 `selftest.py` asserts three things that look like failures: that the intervals
 are too narrow, that the model under-forecasts the top decile, and that a fold

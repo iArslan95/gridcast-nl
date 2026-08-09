@@ -869,6 +869,18 @@ elif sectie == "Regio en congestie":
         "grilliger, weegt één industriële aansluiting zwaar, en verschuift het "
         "doel van een gemiddelde naar een staart.")
     note(
+        "<b>Hoe deze kaart en de rest van de demo op elkaar aansluiten.</b> Elk "
+        "rood gebied hierboven is in het klein het probleem waar de sectie "
+        "<em>Waarde en besluit</em> de gereedschappen voor laat zien: een harde "
+        "grens, een vraagreeks die eromheen beweegt, en de vraag hoe lang van "
+        "tevoren je een overschrijding ziet aankomen. Wat daar op de landelijke "
+        "reeks staat, is wat ik voor één zo'n gebied zou bouwen: dezelfde "
+        "leakagevrije backtest, dezelfde kansverdeling per horizon, dezelfde "
+        "afweging tussen missen en loos uitrukken, maar dan op de reeks van dat "
+        "gebied, met zijn eigen staartgedrag. De volgorde van aanpak staat vast: "
+        "eerst de baseline op de gebiedsreeks, dan pas een model dat hem "
+        "verslaat.")
+    note(
         f"<b>Twee dingen over deze data die je moet weten voor je hem gebruikt.</b> "
         f"De kaart bestaat uit {nl(cap_meta.get('polygonen', len(cap)))} getekende "
         f"vlakken die samen {nl(cap_meta.get('gebieden', 0))} voedingsgebieden "

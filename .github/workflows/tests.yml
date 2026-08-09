@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install the app's own requirements plus pytest
+        run: pip install -r requirements.txt pytest
+      - name: Unit tests (leakage, lag arithmetic, hand-computed metrics)
+        run: python -m pytest tests -q
+      - name: Invariants over the committed backtest
+        run: python scripts/selftest.py
+      - name: Headless UI walk across all six sections
+        run: python scripts/ui_test.py
