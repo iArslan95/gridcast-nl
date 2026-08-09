@@ -1,9 +1,9 @@
-"""GridCast — hourly Dutch electricity load, one to seven days ahead.
+"""GridCast: hourly Dutch electricity load, one to seven days ahead.
 
 The app trains nothing. Everything it shows was produced by
 scripts/build_artifacts.py: a rolling-origin backtest with a quarterly refit
 over 2018-2020, written to parquet and committed. Here we only read and
-aggregate.
+aggregate. Interface copy is Dutch; code and comments stay English.
 
 Run:  streamlit run app.py
 """
@@ -17,7 +17,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="GridCast — Dutch load forecasting",
+st.set_page_config(page_title="GridCast: landelijke elektriciteitsvraag",
                    page_icon="⚡", layout="wide")
 
 # Streamlit replaced use_container_width with width="stretch" in 1.49. The host
@@ -29,19 +29,26 @@ WIDE = {"width": "stretch"} if _VERSION >= (1, 49) else {"use_container_width": 
 DATA = pathlib.Path(__file__).parent / "data" / "processed"
 TZ = "Europe/Amsterdam"
 ACCENT = "#4338ca"
+HOURS_PER_YEAR = 8766.0
 
-SERIES_STYLE = {
-    "lgbm": dict(name="Gradient boosting", color=ACCENT, width=2.6, dash=None),
-    "seasonal_naive": dict(name="Seasonal naive", color="#57534e", width=1.8,
-                           dash=None),
-    "hour_of_week": dict(name="Hour-of-week mean", color="#a8a29e", width=1.4,
-                         dash="dot"),
-    "fourier": dict(name="Seasonal Fourier", color="#0f766e", width=1.4,
-                    dash="dash"),
-    "persistence": dict(name="Persistence", color="#d6d3d1", width=1.2,
-                        dash="dot"),
+NAMES = {
+    "lgbm": "Gradient boosting",
+    "seasonal_naive": "Seizoensnaief",
+    "hour_of_week": "Uur-van-de-week gemiddelde",
+    "fourier": "Seizoens-Fourier",
+    "persistence": "Persistentie",
+}
+STYLE = {
+    "lgbm": dict(color=ACCENT, width=2.6, dash=None),
+    "seasonal_naive": dict(color="#57534e", width=1.8, dash=None),
+    "hour_of_week": dict(color="#a8a29e", width=1.4, dash="dot"),
+    "fourier": dict(color="#0f766e", width=1.4, dash="dash"),
+    "persistence": dict(color="#d6d3d1", width=1.2, dash="dot"),
 }
 MODELS = ["lgbm", "seasonal_naive", "hour_of_week", "fourier"]
+MAANDEN = {1: "januari", 2: "februari", 3: "maart", 4: "april", 5: "mei",
+           6: "juni", 7: "juli", 8: "augustus", 9: "september", 10: "oktober",
+           11: "november", 12: "december"}
 
 CSS = """
 <style>
@@ -51,8 +58,9 @@ CSS = """
   border: 1px solid #e7e5e4; border-left: 4px solid #4338ca;
   border-radius: 14px; padding: 26px 30px; margin-bottom: 18px;
 }
-.hero h1 {margin: 0; font-size: 1.8rem; color: #1c1917; letter-spacing: -0.01em;}
-.hero p {margin: 8px 0 0; color: #78716c; font-size: 0.98rem; max-width: 95ch;}
+.hero h1 {margin: 0; font-size: 1.75rem; color: #1c1917; letter-spacing: -0.01em;}
+.hero h2 {margin: 4px 0 0; font-size: 1.02rem; font-weight: 600; color: #4338ca;}
+.hero p {margin: 10px 0 0; color: #78716c; font-size: 0.98rem; max-width: 95ch;}
 [data-testid="stMetric"] {
   background: #ffffff; border: 1px solid #e7e5e4;
   border-radius: 12px; padding: 14px 16px;
@@ -85,19 +93,26 @@ CSS = """
 st.markdown(CSS, unsafe_allow_html=True)
 
 
+def nl(x: float, decimals: int = 0, unit: str = "") -> str:
+    """Dutch number formatting: dot for thousands, comma for decimals."""
+    s = f"{x:,.{decimals}f}".replace(",", " ").replace(".", ",")
+    s = s.replace(" ", ".")
+    return f"{s}{unit}"
+
+
 # ---------------------------------------------------------------- loading ---
-@st.cache_data(show_spinner="Reading the backtest…")
+@st.cache_data(show_spinner="Backtest inlezen…")
 def load_backtest() -> pd.DataFrame:
     bt = pd.read_parquet(DATA / "backtest.parquet")
     local = bt["target"].dt.tz_convert(TZ)
-    bt["target_local"] = local
-    # Week buckets in local time; the period conversion has no use for the
-    # offset and warns if it is left on.
     bt["week"] = local.dt.tz_localize(None).dt.to_period("W").dt.start_time
-    bt["season"] = np.select(
+    bt["seizoen"] = np.select(
         [local.dt.month.isin([12, 1, 2]), local.dt.month.isin([6, 7, 8])],
-        ["winter", "summer"], default="spring / autumn")
-    bt["period"] = np.where(local.dt.hour.between(7, 19), "peak 07-19", "off-peak")
+        ["winter", "zomer"], default="voor- en najaar")
+    bt["dagdeel"] = np.where(local.dt.hour.between(7, 19), "piek 07-19", "dal")
+    bt["dagsoort"] = bt["segment"].map(
+        {"working day": "werkdag", "weekend": "weekend",
+         "public holiday": "feestdag"})
     return bt
 
 
@@ -119,44 +134,42 @@ def load_monthly_levels() -> pd.DataFrame:
     return pd.read_parquet(DATA / "monthly_levels.parquet")
 
 
-def mape(y: np.ndarray, p: np.ndarray) -> float:
+@st.cache_data
+def load_quantiles() -> pd.DataFrame:
+    return pd.read_parquet(DATA / "residual_quantiles.parquet")
+
+
+def mape(y, p) -> float:
+    y, p = np.asarray(y, float), np.asarray(p, float)
     return float(np.mean(np.abs((p - y) / y)) * 100)
 
 
 @st.cache_data
-def by_horizon(_key: str = "v1") -> pd.DataFrame:
+def by_horizon(_v: str = "1") -> pd.DataFrame:
     bt = load_backtest()
     rows = []
     for h, d in bt.groupby("h"):
-        row = {"h": h}
+        row = {"h": int(h)}
         for m in MODELS:
             e = d[f"pred_{m}"] - d["y"]
             row[f"mape_{m}"] = float(np.mean(np.abs(e / d["y"])) * 100)
-            row[f"mae_{m}"] = float(np.mean(np.abs(e)))
             row[f"bias_{m}"] = float(np.mean(e))
         s = d[d["lo80"].notna()]
-        row["coverage"] = float(
+        row["dekking"] = float(
             np.mean((s["y"] >= s["lo80"]) & (s["y"] <= s["hi80"])) * 100)
-        row["width"] = float(np.mean(s["hi80"] - s["lo80"]))
         rows.append(row)
     return pd.DataFrame(rows)
 
 
 @st.cache_data
-def by_week(_key: str = "v1") -> pd.DataFrame:
+def by_week(_v: str = "1") -> pd.DataFrame:
     bt = load_backtest()
     rows = []
     for wk, d in bt.groupby("week"):
-        s = d[d["lo80"].notna()]
-        rows.append({
-            "week": wk,
-            "mape_lgbm": mape(d["y"], d["pred_lgbm"]),
-            "mape_seasonal_naive": mape(d["y"], d["pred_seasonal_naive"]),
-            "bias": float(np.mean(d["pred_lgbm"] - d["y"])),
-            "coverage": float(np.mean((s["y"] >= s["lo80"])
-                                      & (s["y"] <= s["hi80"])) * 100)
-            if len(s) else np.nan,
-        })
+        rows.append({"week": wk,
+                     "mape_lgbm": mape(d["y"], d["pred_lgbm"]),
+                     "mape_seasonal_naive": mape(d["y"], d["pred_seasonal_naive"]),
+                     "bias": float(np.mean(d["pred_lgbm"] - d["y"]))})
     return pd.DataFrame(rows)
 
 
@@ -165,11 +178,51 @@ def by_segment(column: str) -> pd.DataFrame:
     bt = load_backtest()
     rows = []
     for key, d in bt.groupby(column):
-        row = {"segment": key, "hours": len(d)}
+        row = {"segment": str(key), "uren": len(d)}
         for m in MODELS:
-            row[SERIES_STYLE[m]["name"]] = mape(d["y"], d[f"pred_{m}"])
+            row[NAMES[m]] = mape(d["y"], d[f"pred_{m}"])
         rows.append(row)
-    return pd.DataFrame(rows).sort_values("hours", ascending=False)
+    return pd.DataFrame(rows).sort_values("uren", ascending=False)
+
+
+@st.cache_data
+def exceedance(h: int, capacity: float) -> pd.DataFrame:
+    """Turn each point forecast into a probability that the limit is passed.
+
+    P(y > C) = P(residual > C - forecast), read from the empirical residual
+    distribution of that horizon, built from folds that had already closed.
+    Fold 1 has no such distribution and is left out, exactly as with the
+    intervals.
+    """
+    bt = load_backtest()
+    q = load_quantiles()
+    d = bt[(bt["h"] == h) & (bt["fold"] > 1)][
+        ["fold", "target", "y", "pred_lgbm", "pred_seasonal_naive"]].copy()
+
+    kans = np.empty(len(d), dtype=float)
+    folds = d["fold"].to_numpy()
+    for fold in np.unique(folds):
+        qq = q[(q["fold"] == fold) & (q["h"] == h)].sort_values("resid")
+        mask = folds == fold
+        nodig = capacity - d.loc[mask, "pred_lgbm"].to_numpy(float)
+        cdf = np.interp(nodig, qq["resid"].to_numpy(float),
+                        qq["q"].to_numpy(float), left=0.0, right=1.0)
+        kans[mask] = 1.0 - cdf
+
+    d["kans"] = kans
+    d["overschreden"] = d["y"] > capacity
+    return d
+
+
+def alarm_stats(d: pd.DataFrame, alarm: np.ndarray) -> dict:
+    raak = int((alarm & d["overschreden"]).sum())
+    vals = int((alarm & ~d["overschreden"]).sum())
+    gemist = int((~alarm & d["overschreden"]).sum())
+    maanden = max((d["target"].max() - d["target"].min()).days / 30.44, 1e-9)
+    return {"raak": raak, "vals": vals, "gemist": gemist,
+            "recall": raak / max(raak + gemist, 1) * 100,
+            "precisie": raak / max(raak + vals, 1) * 100,
+            "vals_pm": vals / maanden}
 
 
 def layout(fig: go.Figure, ytitle: str, xtitle: str, height: int = 380) -> go.Figure:
@@ -188,472 +241,540 @@ def layout(fig: go.Figure, ytitle: str, xtitle: str, height: int = 380) -> go.Fi
 
 meta = load_meta()
 overall = meta["overall"]
-summary = meta["series"]
+reeks = meta["series"]
+n_forecasts = int(sum(f["forecasts"] for f in meta["folds"]))
 
 st.markdown(f"""
 <div class="hero">
-  <h1>⚡ GridCast — Dutch electricity load, 1 to 7 days ahead</h1>
-  <p>Hourly national load for the Netherlands, forecast up to 168 hours out and
-  scored by a rolling-origin backtest over {meta['test_start'][:4]} to 2020:
-  {len(meta['folds'])} quarterly refits, {int(sum(f['forecasts'] for f in meta['folds'])):,}
-  forecasts, every one of them made with data that existed at the time. Every
-  number on this page sits next to the baseline it has to beat.</p>
+  <h1>⚡ GridCast</h1>
+  <h2>Landelijke elektriciteitsvraag per uur, 1 tot 7 dagen vooruit</h2>
+  <p>Voorspellen is het makkelijke deel. De vraag die telt is wanneer je je eigen
+  getal nog mag geloven. Dat wordt hier gemeten met een rolling origin backtest
+  over {meta['test_start'][:4]} tot 2020: {len(meta['folds'])}
+  kwartaalhertrainingen, {nl(n_forecasts)} voorspellingen, elk gemaakt met
+  uitsluitend data die op dat moment bestond. Naast elk cijfer staat de baseline
+  die het moet verslaan.</p>
 </div>
 """, unsafe_allow_html=True)
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Model MAPE", f"{overall['lgbm']['mape']:.2f}%",
-          f"{overall['lgbm']['mape'] - overall['seasonal_naive']['mape']:+.2f} pp "
-          f"vs seasonal naive", delta_color="inverse")
-c2.metric("Seasonal naive MAPE", f"{overall['seasonal_naive']['mape']:.2f}%",
-          "the baseline to beat", delta_color="off")
-c3.metric("Mean absolute error", f"{overall['lgbm']['mae']:,.0f} MW",
-          f"{overall['lgbm']['bias']:+,.0f} MW bias", delta_color="off")
-c4.metric("80% interval, realised coverage", f"{meta['coverage80']:.1f}%",
-          f"{meta['coverage80'] - 80:.1f} pp vs nominal", delta_color="inverse")
+c1.metric("MAPE model", nl(overall["lgbm"]["mape"], 2, "%"),
+          nl(overall["lgbm"]["mape"] - overall["seasonal_naive"]["mape"], 2)
+          + " pp t.o.v. seizoensnaief", delta_color="inverse")
+c2.metric("MAPE seizoensnaief", nl(overall["seasonal_naive"]["mape"], 2, "%"),
+          "de baseline", delta_color="off")
+c3.metric("Gemiddelde absolute fout", nl(overall["lgbm"]["mae"], 0, " MW"),
+          nl(overall["lgbm"]["bias"], 0, " MW bias"), delta_color="off")
+c4.metric("80%-interval, werkelijke dekking", nl(meta["coverage80"], 1, "%"),
+          nl(meta["coverage80"] - 80, 1) + " pp t.o.v. nominaal",
+          delta_color="inverse")
 
 tab1, tab2, tab3, tab4 = st.tabs(
-    ["The problem", "Model and backtest", "What it is worth", "Monitoring"])
+    ["Het probleem", "Model en backtest", "Van voorspelling naar besluit",
+     "Monitoring"])
 
-# ------------------------------------------------------------- 1. problem ---
+# ------------------------------------------------------------- 1. probleem ---
 with tab1:
     st.markdown("""
-    Forecast too low and there is not enough capacity contracted for the hour;
-    forecast too high and capacity is paid for and not used. Those two mistakes
-    do not cost the same amount, which is why this page ends in euros rather
-    than in percentages.
+    Te laag voorspellen betekent dat er te weinig capaciteit klaarstaat. Te hoog
+    voorspellen betekent capaciteit betalen die ongebruikt blijft. Die twee
+    fouten kosten niet hetzelfde, en daarom is een accuratessepercentage nog geen
+    antwoord.
     """)
 
-    st.subheader("The series, and why it starts in 2016")
+    st.subheader("De reeks, en waarom hij in 2016 begint")
     lv = load_monthly_levels()
     fig = go.Figure()
-    years = [c for c in lv.columns if c != "month"]
-    for y in years:
-        excluded = str(y) == "2015"
+    for jaar in [c for c in lv.columns if c != "month"]:
+        uit = str(jaar) == "2015"
         fig.add_trace(go.Scatter(
-            x=lv["month"], y=lv[y], name=str(y), mode="lines+markers",
-            line=dict(color="#b45309" if excluded else ACCENT,
-                      width=2.6 if excluded else 1.4,
-                      dash="dash" if excluded else None),
-            opacity=1.0 if excluded else 0.45))
-    fig = layout(fig, "mean load (MW)", "calendar month")
+            x=lv["month"], y=lv[jaar], name=str(jaar), mode="lines+markers",
+            line=dict(color="#b45309" if uit else ACCENT,
+                      width=2.6 if uit else 1.4,
+                      dash="dash" if uit else None),
+            opacity=1.0 if uit else 0.45))
+    fig = layout(fig, "gemiddelde belasting (MW)", "kalendermaand")
     fig.update_xaxes(tickmode="linear", dtick=1)
     st.plotly_chart(fig, **WIDE)
     st.markdown("""
     <div class="note">
-    Every month of 2015 (amber) sits 1.7 to 2.0 GW below the same month of every
-    later year, while 2016 through 2019 lie on top of each other. Demand does not
-    move 16% in one January and then hold still for four years: this is a change
-    in what was reported, not in what was consumed. The series therefore starts
-    at 2016-01-01, which costs a year of history and buys a series that measures
-    one thing throughout.
+    Elke maand van 2015 (amber) ligt 1,7 tot 2,0 GW onder dezelfde maand van elk
+    later jaar, terwijl 2016 tot en met 2019 op elkaar liggen. Verbruik
+    verspringt niet 16% in één januari om daarna vier jaar stil te staan. Dit is
+    een wijziging in wat er gerapporteerd werd, niet in wat er verbruikt werd. De
+    reeks start daarom op 1 januari 2016. Dat kost een jaar historie en levert
+    een reeks op die overal hetzelfde meet.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("The shape of a day, and what a holiday does to it")
+    st.subheader("De vorm van een dag, en wat een feestdag ermee doet")
     s = load_series()
     s["dow"] = s["local"].dt.dayofweek
     s["hr"] = s["local"].dt.hour
-    groups = {
-        "Working day": s[(s["dow"] < 5) & ~s["is_holiday"]],
+    groepen = {
+        "Werkdag": s[(s["dow"] < 5) & ~s["is_holiday"]],
         "Weekend": s[s["dow"] >= 5],
-        "Public holiday": s[s["is_holiday"]],
+        "Feestdag": s[s["is_holiday"]],
     }
     fig = go.Figure()
-    for (label, part), color in zip(groups.items(), [ACCENT, "#57534e", "#b45309"]):
-        prof = part.groupby("hr")["load"].mean()
+    for (label, deel), kleur in zip(groepen.items(), [ACCENT, "#57534e", "#b45309"]):
+        prof = deel.groupby("hr")["load"].mean()
         fig.add_trace(go.Scatter(x=prof.index, y=prof.values, name=label,
-                                 mode="lines", line=dict(width=2.4, color=color)))
-    fig = layout(fig, "mean load (MW)", "hour of day (local time)")
+                                 mode="lines", line=dict(width=2.4, color=kleur)))
+    fig = layout(fig, "gemiddelde belasting (MW)", "uur van de dag (lokale tijd)")
     fig.update_xaxes(dtick=3)
     st.plotly_chart(fig, **WIDE)
-    work = s[(s["dow"] < 5) & ~s["is_holiday"]]["load"].mean()
-    hol = s[s["is_holiday"]]["load"].mean()
+    werk = s[(s["dow"] < 5) & ~s["is_holiday"]]["load"].mean()
+    feest = s[s["is_holiday"]]["load"].mean()
     st.markdown(f"""
     <div class="note">
-    A public holiday runs {hol / work - 1:.1%} below a working day and keeps the
-    weekend's flatter shape. That is a calendar fact, knowable years ahead, and
-    it is where a model earns most of its advantage over "same hour last week":
-    last week was a Tuesday, this Tuesday is Ascension Day.
+    Een feestdag ligt {nl(abs(feest / werk - 1) * 100, 1)}% onder een werkdag en
+    houdt de vlakkere vorm van het weekend. Dat is een kalenderfeit, jaren
+    vooruit bekend, en precies daar verdient een model zijn meerwaarde boven
+    "hetzelfde uur vorige week": vorige week was het een gewone donderdag, deze
+    donderdag is het Hemelvaart.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("Temperature, which this model does not use")
-    daily = (s.set_index("local").resample("D")
-             .agg({"load": "mean", "temp_c": "mean", "dow": "first",
-                   "is_holiday": "max"}).dropna())
-    daily = daily[(daily["dow"] < 5) & ~daily["is_holiday"].astype(bool)]
+    st.subheader("Temperatuur, die dit model niet gebruikt")
+    dag = (s.set_index("local").resample("D")
+           .agg({"load": "mean", "temp_c": "mean", "dow": "first",
+                 "is_holiday": "max"}).dropna())
+    dag = dag[(dag["dow"] < 5) & ~dag["is_holiday"].astype(bool)]
     fig = go.Figure(go.Scattergl(
-        x=daily["temp_c"], y=daily["load"], mode="markers",
+        x=dag["temp_c"], y=dag["load"], mode="markers", name="werkdag",
         marker=dict(size=5, color=ACCENT, opacity=0.35),
-        name="working day", hovertemplate="%{x:.1f} °C, %{y:,.0f} MW<extra></extra>"))
-    binned = daily.groupby(pd.cut(daily["temp_c"], np.arange(-6, 30, 2)),
-                           observed=True)["load"].mean()
-    centres = [iv.mid for iv in binned.index]
-    fig.add_trace(go.Scatter(x=centres, y=binned.values, mode="lines+markers",
-                             line=dict(color="#b45309", width=2.6),
-                             name="2 °C bin mean"))
-    fig = layout(fig, "daily mean load (MW)", "daily mean temperature (°C)")
+        hovertemplate="%{x:.1f} °C, %{y:,.0f} MW<extra></extra>"))
+    bins = dag.groupby(pd.cut(dag["temp_c"], np.arange(-6, 30, 2)),
+                       observed=True)["load"].mean()
+    fig.add_trace(go.Scatter(x=[iv.mid for iv in bins.index], y=bins.values,
+                             mode="lines+markers", name="gemiddelde per 2 °C",
+                             line=dict(color="#b45309", width=2.6)))
+    fig = layout(fig, "gemiddelde dagbelasting (MW)",
+                 "gemiddelde dagtemperatuur (°C)")
     fig.update_layout(hovermode="closest")
     st.plotly_chart(fig, **WIDE)
     st.markdown("""
     <div class="note">
-    Clear and U-shaped: heating below roughly 15 °C, cooling above roughly 20 °C,
-    and a flat valley in between. It explains a large share of the day-to-day
-    variation, and it is still left out of the model on purpose. Using
-    temperature at t+168 means feeding in a weather forecast, whose own error is
-    not measured anywhere in this backtest. A model scored on temperatures that
-    actually happened reports an accuracy nobody will reproduce in operation.
-    The honest options are to leave it out, or to build a second error budget for
-    the weather. This demo takes the first.
+    Duidelijk en U-vormig: verwarmen onder ruwweg 15 °C, koelen boven ruwweg
+    20 °C, met een vlak dal ertussen. Het verklaart een groot deel van de
+    dagelijkse variatie, en het zit bewust niet in het model. Temperatuur
+    gebruiken op t+168 betekent een weersverwachting invoeren waarvan de eigen
+    fout nergens in deze backtest gemeten is. Een model dat beoordeeld wordt op
+    temperaturen die daadwerkelijk zijn opgetreden, rapporteert een accuratesse
+    die niemand in productie terugziet. De eerlijke keuzes zijn hem weglaten, of
+    een tweede foutenbegroting bouwen voor het weer. Deze demo doet het eerste,
+    en de monitoringtab laat zien wat die keuze in augustus 2020 kostte.
     </div>
     """, unsafe_allow_html=True)
 
-    with st.expander("A published forecast that does not survive being checked"):
+    with st.expander("Een gepubliceerde voorspelling die de controle niet overleeft"):
         st.markdown("""
-        The same source ships a day-ahead load forecast alongside the
-        realisations, and it was the obvious hard baseline for this project.
-        It does not hold up. Scored against the actuals in the very same file:
+        Dezelfde bron levert naast de realisaties ook een dag-vooruit
+        voorspelling mee, en dat was de voor de hand liggende harde baseline voor
+        dit project. Die houdt geen stand. Gescoord tegen de realisaties uit
+        hetzelfde bestand:
         """)
         fc = s.dropna(subset=["tso_day_ahead"]).copy()
-        fc["year"] = fc["local"].dt.year
-        rows = []
-        for y, d in fc.groupby("year"):
+        fc["jaar"] = fc["local"].dt.year
+        rijen = []
+        for jaar, d in fc.groupby("jaar"):
             e = d["tso_day_ahead"] - d["load"]
-            rows.append({"year": int(y), "hours": len(d),
-                         "MAPE %": mape(d["load"], d["tso_day_ahead"]),
-                         "bias MW": float(e.mean()),
-                         "bias %": float(e.mean() / d["load"].mean() * 100)})
-        st.dataframe(pd.DataFrame(rows).round(2), hide_index=True,
-                     **WIDE)
+            rijen.append({"jaar": int(jaar), "uren": len(d),
+                          "MAPE %": mape(d["load"], d["tso_day_ahead"]),
+                          "bias MW": float(e.mean()),
+                          "bias %": float(e.mean() / d["load"].mean() * 100)})
+        st.dataframe(pd.DataFrame(rijen).round(2), hide_index=True, **WIDE)
         st.markdown("""
         <div class="warn">
-        A systematic error that runs about +5% for three years and then flips to
-        −14% is not a forecast that got worse, it is two columns measured on
-        different bases. On Christmas Day 2018 the file predicts 19,423 MW
-        against 12,139 MW realised. So it is not used as a baseline here, and it
-        is on this page instead: checking a published number against the
-        realisations in the same file takes an afternoon, and skipping that step
-        is how a whole project ends up anchored to something that was never
-        comparable.
+        Een systematische afwijking die drie jaar lang rond +5% ligt en dan
+        omklapt naar min 14% is geen voorspelling die slechter werd, dat zijn
+        twee kolommen op een verschillende grondslag. Op eerste kerstdag 2018
+        staat er 19.423 MW voorspeld tegen 12.139 MW gerealiseerd. Hij wordt hier
+        dus niet als baseline gebruikt, en staat op deze pagina om een andere
+        reden: een gepubliceerd getal narekenen tegen de realisaties in hetzelfde
+        bestand kost een middag, en die stap overslaan is hoe een heel project
+        verankerd raakt aan iets dat nooit vergelijkbaar was.
         </div>
         """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------ 2. backtest ---
 with tab2:
-    st.subheader("How the accuracy was measured")
+    st.subheader("Hoe de accuratesse gemeten is")
     st.markdown("""
-    Walk forward, never sideways. The model is refit every quarter on
-    everything up to that cut and on nothing after it, then forecasts every six
-    hours for the following quarter, 168 hours out each time. Those forecasts
-    are scored once and never revisited. There is no random train/test split
-    anywhere in the repository: shuffling hours lets a model interpolate
-    between the hour before and the hour after and score beautifully while
-    being useless.
+    Vooruit lopen, niet opzij. Het model wordt elk kwartaal opnieuw gefit op
+    alles tot die knip en op niets erna, en voorspelt daarna elke zes uur 168 uur
+    vooruit. Die voorspellingen worden één keer gescoord en nooit herzien. Er zit
+    nergens in deze repo een willekeurige train/test-split: uren door elkaar
+    husselen laat een model interpoleren tussen het uur ervoor en het uur erna,
+    wat prachtig scoort en niets waard is.
     """)
-    folds = pd.DataFrame(meta["folds"])
-    st.dataframe(folds, hide_index=True, **WIDE)
+    st.dataframe(pd.DataFrame(meta["folds"]).rename(columns={
+        "trained through": "getraind t/m", "first origin": "eerste origin",
+        "last target": "laatste doeluur", "forecasts": "voorspellingen"}),
+        hide_index=True, **WIDE)
     st.markdown("""
     <div class="note">
-    Training rows stop a full 168 hours before each cut, not at the cut. An
-    origin closer than the longest horizon would need a target the model is not
-    allowed to see, and dropping only those rows would quietly delete the long
-    horizons from the training set. <code>tests/test_no_leakage.py</code> checks
-    the property rather than the intention: it replaces every value after the
-    origin with nonsense, rebuilds the features and requires them to come out
-    bit for bit identical.
+    Trainingsrijen stoppen een volle 168 uur vóór elke knip, niet op de knip
+    zelf. Een origin dichterbij dan de langste horizon zou een doeluur nodig
+    hebben dat het model niet mag zien, en alleen die rijen weggooien zou de
+    lange horizons stilletjes uit de trainingsset verwijderen.
+    <code>tests/test_no_leakage.py</code> controleert de eigenschap in plaats van
+    de bedoeling: het vervangt elke waarde ná de origin door onzin, bouwt de
+    features opnieuw en eist dat ze identiek terugkomen.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("Error by horizon")
+    st.subheader("Fout per horizon")
     h = by_horizon()
     fig = go.Figure()
     for m in MODELS:
-        sty = SERIES_STYLE[m]
-        fig.add_trace(go.Scatter(
-            x=h["h"], y=h[f"mape_{m}"], name=sty["name"], mode="lines",
-            line=dict(color=sty["color"], width=sty["width"], dash=sty["dash"])))
-    fig = layout(fig, "MAPE (%)", "horizon h (hours ahead)")
+        fig.add_trace(go.Scatter(x=h["h"], y=h[f"mape_{m}"], name=NAMES[m],
+                                 mode="lines", line=dict(**STYLE[m])))
+    fig = layout(fig, "MAPE (%)", "horizon h (uren vooruit)")
     fig.update_xaxes(dtick=24)
     st.plotly_chart(fig, **WIDE)
     st.markdown(f"""
     <div class="note">
-    The model runs from {h['mape_lgbm'].iloc[0]:.2f}% one hour out to
-    {h['mape_lgbm'].iloc[-1]:.2f}% a week out. That is a small rise, and it is
-    the most interesting result here: at national level a week ahead is barely
-    harder than an hour ahead, because almost all the signal is calendar shape
-    that is equally knowable at both. It also explains the two flat lines.
-    Seasonal naive uses the same value at every horizon, and the Fourier model
-    uses no recent load at all, so neither has anything left to lose as the
-    horizon grows. Only the boosted model holds recent information, and only it
-    has a curve that slopes.
+    Het model loopt van {nl(h['mape_lgbm'].iloc[0], 2)}% één uur vooruit naar
+    {nl(h['mape_lgbm'].iloc[-1], 2)}% een week vooruit. Dat is een kleine
+    stijging, en het is het interessantste resultaat hier: op landelijk niveau is
+    een week vooruit nauwelijks moeilijker dan een uur vooruit, omdat vrijwel
+    alle informatie kalendervorm is die op beide momenten even goed bekend is.
+    Het verklaart ook de twee vlakke lijnen. Seizoensnaief gebruikt op elke
+    horizon dezelfde waarde en het Fourier-model gebruikt helemaal geen recente
+    belasting, dus geen van beide heeft nog iets te verliezen naarmate de horizon
+    groeit. Alleen het geboosterde model houdt recente informatie vast, en alleen
+    dat heeft een lijn die loopt.
     <br><br>
-    The forecasts are issued at 00, 06, 12 and 18 UTC rather than once a day.
-    With a single daily origin, h = 24, 48 … 168 would all land at midnight,
-    the steadiest hour of the day, and this chart would be measuring the clock
-    instead of the horizon. Four origins do not remove that entirely: each
-    horizon still lands on a fixed set of four clock hours, and the set shifts
-    with h, which is the small ripple in these lines. The clean comparison is h
-    against h + 24, where the hours match exactly and only the lead time
-    differs. Done that way a day of extra lead time costs the boosted model
-    0.04 pp and costs the two flat models at most 0.01 pp, which is the
-    statement the chart is making.
+    De voorspellingen worden om 00, 06, 12 en 18 UTC uitgegeven en niet één keer
+    per dag. Bij één dagelijkse origin zou h = 24, 48 tot en met 168 allemaal op
+    middernacht landen, het rustigste uur van de dag, en dan meet deze grafiek de
+    klok in plaats van de horizon. Vier origins halen dat er niet helemaal uit:
+    elke horizon landt nog steeds op vier vaste kloktijden en die set schuift met
+    h, wat de kleine rimpeling in deze lijnen is. De zuivere vergelijking is h
+    tegen h+24, waar de uren exact matchen en alleen de aanlooptijd verschilt. Zo
+    gemeten kost een dag extra aanlooptijd het geboosterde model 0,04 pp en de
+    twee vlakke modellen hoogstens 0,01 pp.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("Bias, kept apart from accuracy")
+    st.subheader("Bias, apart gehouden van accuratesse")
     fig = go.Figure()
     for m in MODELS:
-        sty = SERIES_STYLE[m]
-        fig.add_trace(go.Scatter(
-            x=h["h"], y=h[f"bias_{m}"], name=sty["name"], mode="lines",
-            line=dict(color=sty["color"], width=sty["width"], dash=sty["dash"])))
+        fig.add_trace(go.Scatter(x=h["h"], y=h[f"bias_{m}"], name=NAMES[m],
+                                 mode="lines", line=dict(**STYLE[m])))
     fig.add_hline(y=0, line=dict(color="#a8a29e", width=1))
-    fig = layout(fig, "mean error (MW), positive = forecast too high",
-                 "horizon h (hours ahead)", height=320)
+    fig = layout(fig, "gemiddelde fout (MW), positief = te hoog voorspeld",
+                 "horizon h (uren vooruit)", height=320)
     fig.update_xaxes(dtick=24)
     st.plotly_chart(fig, **WIDE)
     st.markdown("""
     <div class="note">
-    Two models can share a MAE and mean completely different things. Errors
-    scattered around zero are noise, and you hold a reserve against them.
-    Errors that lean one way every hour are a systematic shortfall, and you fix
-    the model instead. The Fourier model leans high by roughly 250 MW because it
-    has no way to notice that the level has moved; the boosted model does not,
-    until 2020, which the monitoring tab picks up.
+    Twee modellen kunnen dezelfde MAE hebben en iets totaal verschillends
+    betekenen. Fouten die rond nul schommelen zijn ruis, en daar houd je een
+    reserve tegen aan. Fouten die elk uur dezelfde kant op leunen zijn een
+    systematisch tekort, en dat repareer je in het model. Het Fourier-model leunt
+    ruwweg 250 MW te hoog omdat het geen enkele manier heeft om te merken dat het
+    niveau verschoven is.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("Do the intervals mean what they say?")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=h["h"], y=h["coverage"], name="realised coverage",
-                             mode="lines", line=dict(color=ACCENT, width=2.6)))
+    st.subheader("Betekenen de intervallen wat ze beweren?")
+    fig = go.Figure(go.Scatter(x=h["h"], y=h["dekking"], name="werkelijke dekking",
+                               mode="lines", line=dict(color=ACCENT, width=2.6)))
     fig.add_hline(y=80, line=dict(color="#b45309", width=1.6, dash="dash"),
-                  annotation_text="80% nominal", annotation_position="top left")
-    fig = layout(fig, "share of realisations inside the band (%)",
-                 "horizon h (hours ahead)", height=320)
+                  annotation_text="80% nominaal", annotation_position="top left")
+    fig = layout(fig, "aandeel realisaties binnen de band (%)",
+                 "horizon h (uren vooruit)", height=320)
     fig.update_yaxes(range=[50, 95])
     fig.update_xaxes(dtick=24)
     st.plotly_chart(fig, **WIDE)
     st.markdown(f"""
     <div class="warn">
-    An 80% interval that contains {meta['coverage80']:.1f}% of realisations is
-    too narrow, and this is the number I would put in front of a client first.
-    The bands are the empirical quantiles of the errors the model actually made
-    in earlier folds, so they describe the past well and only hold while the
-    future keeps behaving like it. In 2020 it stopped, coverage fell to 55%, and
-    a band nobody re-checked would still have been drawn at the same width. The
-    first fold carries no interval at all: at that point no out-of-sample error
-    existed to learn a width from, and borrowing one from later folds would be
-    reading the future.
+    Een 80%-interval dat {nl(meta['coverage80'], 1)}% van de realisaties bevat is
+    te smal, en dit is het getal dat ik als eerste bij een klant op tafel zou
+    leggen. De banden zijn de empirische kwantielen van de fouten die het model
+    in eerdere folds daadwerkelijk maakte. Ze beschrijven het verleden dus goed,
+    en houden alleen stand zolang de toekomst zich blijft gedragen als dat
+    verleden. In 2020 hield dat op, de dekking zakte naar 55%, en een band die
+    niemand hercontroleert was gewoon op dezelfde breedte doorgetekend. De eerste
+    fold heeft helemaal geen interval: op dat moment bestond er nog geen fout
+    buiten de trainingsset om een breedte uit af te leiden, en er een lenen uit
+    latere folds is in de toekomst kijken.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("Where it fails, which is more useful than where it works")
-    left, right = st.columns(2)
-    with left:
-        st.caption("MAPE by day type")
-        st.dataframe(by_segment("segment").round(2), hide_index=True,
-                     **WIDE)
-        st.caption("MAPE by season")
-        st.dataframe(by_segment("season").round(2), hide_index=True,
-                     **WIDE)
-    with right:
-        st.caption("MAPE by time of day")
-        st.dataframe(by_segment("period").round(2), hide_index=True,
-                     **WIDE)
-        st.caption("MAPE by fold")
+    st.subheader("Waar het faalt, wat nuttiger is dan waar het slaagt")
+    links, rechts = st.columns(2)
+    with links:
+        st.caption("MAPE per dagsoort")
+        st.dataframe(by_segment("dagsoort").round(2), hide_index=True, **WIDE)
+        st.caption("MAPE per seizoen")
+        st.dataframe(by_segment("seizoen").round(2), hide_index=True, **WIDE)
+    with rechts:
+        st.caption("MAPE per dagdeel")
+        st.dataframe(by_segment("dagdeel").round(2), hide_index=True, **WIDE)
+        st.caption("MAPE per fold")
         bt = load_backtest()
-        rows = []
+        rijen = []
         for f, d in bt.groupby("fold"):
-            rows.append({"fold": int(f),
-                         "through": str(d["target"].min().date()),
-                         "Gradient boosting": mape(d["y"], d["pred_lgbm"]),
-                         "Seasonal naive": mape(d["y"], d["pred_seasonal_naive"])})
-        st.dataframe(pd.DataFrame(rows).round(2), hide_index=True,
-                     **WIDE)
+            rijen.append({"fold": int(f), "vanaf": str(d["target"].min().date()),
+                          "Gradient boosting": mape(d["y"], d["pred_lgbm"]),
+                          "Seizoensnaief": mape(d["y"], d["pred_seasonal_naive"])})
+        st.dataframe(pd.DataFrame(rijen).round(2), hide_index=True, **WIDE)
     st.markdown("""
     <div class="note">
-    Public holidays are where the model is worth having: it roughly halves the
-    error of "same hour last week", which has no way of knowing that today is
-    not a normal Thursday. Peak hours are twice as hard as the night, so a
-    single headline MAPE flatters the hours nobody worries about. And in the
-    final fold the boosted model is <em>beaten</em> by seasonal naive, which is
-    the whole 2020 story and the reason the monitoring tab exists.
+    Op feestdagen verdient het model zijn bestaan: het halveert ruwweg de fout
+    van "hetzelfde uur vorige week", dat geen enkele manier heeft om te weten dat
+    het vandaag geen normale donderdag is. Piekuren zijn twee keer zo moeilijk
+    als de nacht, dus één kop-MAPE vleit vooral de uren waar niemand wakker van
+    ligt. En in de laatste fold wordt het geboosterde model <em>verslagen</em>
+    door seizoensnaief, wat het hele verhaal van 2020 is en de reden dat de
+    monitoringtab bestaat.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("The three models")
+    st.subheader("De drie modellen")
     st.markdown("""
-| Model | What it sees | Why it is here |
+| Model | Wat het ziet | Waarom het er is |
 |---|---|---|
-| **Seasonal naive** | the same hour one week ago | On a series this regular it is a genuine competitor, not a straw man. Anything that cannot beat it does not deserve to run. |
-| **Seasonal Fourier** | Fourier terms for the daily, weekly and yearly cycle, holiday flags, a slow trend. Ridge on log load, no recent load at all | The pure calendar view. Its flat error curve is the reference against which the boosted model's slope means something. Fitted on logs because holidays and seasons act proportionally; the back-transform carries a half-variance correction so the log fit does not introduce a bias of its own. |
-| **Gradient boosting** | origin lags (0 to 168 h), rolling means, the same hour one and two weeks before the target, calendar, and the horizon itself | One model for all 168 horizons, with h as a feature, so the shape of the error-versus-horizon curve is something the model produces rather than something the setup imposes. |
+| **Seizoensnaief** | hetzelfde uur een week eerder | Op een reeks met zoveel weekstructuur is dit een echte concurrent, geen stroman. Wat dit niet verslaat, verdient het niet om te draaien. |
+| **Seizoens-Fourier** | Fourier-termen voor de dag-, week- en jaarcyclus, feestdagvlaggen, een trage trend. Ridge op log-belasting, geen recente belasting | De zuivere kalenderblik. Zijn vlakke foutcurve is de referentie die de helling van het geboosterde model betekenis geeft. Gefit op logs omdat feestdagen en seizoenen proportioneel werken, met een halve-variantiecorrectie op de terugtransformatie zodat de logfit geen eigen bias introduceert. |
+| **Gradient boosting** | origin-lags (0 tot 168 uur), voortschrijdende gemiddelden, hetzelfde uur één en twee weken vóór het doeluur, kalender, en de horizon zelf | Eén model voor alle 168 horizons met h als feature, zodat de vorm van de foutcurve iets is dat het model produceert in plaats van iets dat de opzet oplegt. |
 
-No deep learning and no Prophet. Neither would earn its place on 41,640 hourly
-observations, and both would cost the ability to say why a number came out the
-way it did.
+Geen deep learning en geen Prophet. Geen van beide verdient een plek op 41.640
+uurwaarnemingen, en allebei kosten ze het vermogen om uit te leggen waarom een
+getal eruit kwam zoals het eruit kwam.
     """)
 
-# --------------------------------------------------------------- 3. value ---
+# -------------------------------------------------------------- 3. besluit ---
 with tab3:
-    st.subheader("From a percentage to a number someone can act on")
+    st.subheader("De capaciteitsvraag")
     st.markdown("""
-    A MAPE does not tell anyone whether to buy the model. Put a price on the two
-    directions of error and it does. Errors here are in MW held for one hour,
-    which is MWh, so the two inputs below are euros per MWh of error.
+    Een netbeheerder vraagt zelden hoe nauwkeurig de voorspelling is. De vraag is
+    of een grens overschreden wordt, hoe zeker dat is, en hoe lang van tevoren je
+    het weet. Dat is een ander product dan een puntvoorspelling: je hebt een kans
+    nodig, en dus een verdeling in plaats van één getal.
     """)
-    c1, c2, c3 = st.columns([1, 1, 2])
-    products = {"Day-ahead (h = 24)": 24, "Two days out (h = 48)": 48,
-                "Week ahead (h = 168)": 168}
-    product = c1.selectbox("Forecast product", list(products), index=0)
-    eur_under = c2.number_input("€ per MWh under-forecast", 0.0, 5000.0, 180.0,
-                                10.0, help="Capacity that turned out to be short.")
-    eur_over = c2.number_input("€ per MWh over-forecast", 0.0, 5000.0, 60.0, 10.0,
-                               help="Capacity contracted and not used.")
-    c3.markdown("""<div class='note'>One horizon at a time, on purpose. The
-    backtest holds 168 forecasts for every hour, one per horizon, and summing
-    across them would charge the same hour of error dozens of times over. A
-    price belongs to a product: the day-ahead forecast is a different purchase
-    from the week-ahead one.<br><br>
-    The defaults make under-forecasting three times as expensive as
-    over-forecasting. That ratio is a placeholder, not a market price. Move both
-    fields.</div>""", unsafe_allow_html=True)
 
+    k1, k2, k3 = st.columns([1, 1, 1])
+    lead = k1.selectbox("Aanlooptijd", [24, 48, 72, 168], index=0,
+                        format_func=lambda x: f"{x} uur ({x // 24} dag"
+                                              + ("en)" if x // 24 > 1 else ")"))
     bt = load_backtest()
-    bt = bt[bt["h"] == products[product]]
-    y = bt["y"].to_numpy(dtype=float)
-    hours = len(y)
-    HOURS_PER_YEAR = 8766.0
+    y_lead = bt.loc[bt["h"] == lead, "y"]
+    grens = k2.slider("Capaciteitsgrens (MW)",
+                      int(y_lead.quantile(0.80) // 100 * 100),
+                      int(y_lead.max() // 100 * 100),
+                      int(y_lead.quantile(0.95) // 100 * 100), step=100)
+    d = exceedance(lead, float(grens))
+    k3.metric("Overschrijdingsuren in de backtest",
+              f"{int(d['overschreden'].sum())} van {len(d)}",
+              nl(d["overschreden"].mean() * 100, 1) + "% van de uren",
+              delta_color="off")
 
-    def annual_cost(pred: np.ndarray) -> float:
-        e = pred - y
-        return float((np.maximum(-e, 0).sum() * eur_under
-                      + np.maximum(e, 0).sum() * eur_over)
-                     / hours * HOURS_PER_YEAR)
+    drempels = np.round(np.arange(0.02, 0.99, 0.02), 2)
+    curve = [alarm_stats(d, (d["kans"] >= t).to_numpy()) for t in drempels]
+    punt = alarm_stats(d, (d["pred_lgbm"] > grens).to_numpy())
+    naief = alarm_stats(d, (d["pred_seasonal_naive"] > grens).to_numpy())
 
-    cost = {m: annual_cost(bt[f"pred_{m}"].to_numpy(dtype=float)) for m in MODELS}
-    saving = cost["seasonal_naive"] - cost["lgbm"]
-
-    avoided = float(
-        (np.abs(bt["pred_seasonal_naive"].to_numpy(dtype=float) - y).sum()
-         - np.abs(bt["pred_lgbm"].to_numpy(dtype=float) - y).sum())
-        / hours * HOURS_PER_YEAR)
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Seasonal naive, cost of error",
-              f"€ {cost['seasonal_naive'] / 1e6:,.0f} M / yr")
-    k2.metric("Gradient boosting, cost of error",
-              f"€ {cost['lgbm'] / 1e6:,.0f} M / yr")
-    k3.metric("Difference", f"€ {saving / 1e6:,.0f} M / yr",
-              f"{saving / cost['seasonal_naive']:.1%} lower")
-    k4.metric("Forecast error avoided", f"{avoided / 1000:,.0f} GWh / yr",
-              "no price attached", delta_color="off")
-
-    ratios = np.array([1, 1.5, 2, 3, 4, 6, 8, 10], dtype=float)
-    curve = []
-    for r in ratios:
-        under, over = r * eur_over, eur_over
-        e_m = bt["pred_lgbm"].to_numpy(dtype=float) - y
-        e_b = bt["pred_seasonal_naive"].to_numpy(dtype=float) - y
-        cm = (np.maximum(-e_m, 0).sum() * under + np.maximum(e_m, 0).sum() * over)
-        cb = (np.maximum(-e_b, 0).sum() * under + np.maximum(e_b, 0).sum() * over)
-        curve.append((cb - cm) / hours * HOURS_PER_YEAR)
-    fig = go.Figure(go.Scatter(x=ratios, y=curve, mode="lines+markers",
-                               line=dict(color=ACCENT, width=2.6),
-                               name="annual saving"))
-    fig = layout(fig, "saving against seasonal naive (€/yr)",
-                 "cost of under-forecasting ÷ cost of over-forecasting", height=320)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[c["vals_pm"] for c in curve], y=[c["recall"] for c in curve],
+        mode="lines", name="kansdrempel, van hoog naar laag",
+        line=dict(color=ACCENT, width=2.6),
+        text=[f"drempel {t:.2f}".replace(".", ",") for t in drempels],
+        hovertemplate="%{text}<br>%{y:.0f}% gevonden"
+                      "<br>%{x:.1f} vals alarm per maand<extra></extra>"))
+    fig.add_trace(go.Scatter(x=[punt["vals_pm"]], y=[punt["recall"]], mode="markers",
+                             name="regel: puntvoorspelling boven de grens",
+                             marker=dict(size=13, color="#b45309", symbol="diamond")))
+    fig.add_trace(go.Scatter(x=[naief["vals_pm"]], y=[naief["recall"]], mode="markers",
+                             name="regel: seizoensnaief boven de grens",
+                             marker=dict(size=11, color="#a8a29e", symbol="square")))
+    fig = layout(fig, "aandeel overschrijdingen gevonden (%)",
+                 "vals alarm per maand", height=380)
+    fig.update_layout(hovermode="closest")
     st.plotly_chart(fig, **WIDE)
     st.markdown(f"""
     <div class="note">
-    The saving is not a fixed number, it moves with how asymmetric the cost is.
-    The more expensive under-forecasting becomes relative to over-forecasting,
-    the more a model that leans slightly high is worth, which is why this line
-    slopes at all.
+    De puntvoorspelling geeft je één punt op deze grafiek en verder niets. Bij de
+    gekozen grens vindt de regel "voorspelling boven de grens"
+    {nl(punt['recall'], 0)}% van de overschrijdingen bij
+    {nl(punt['vals_pm'], 1)} vals alarm per maand. De kansdrempel geeft je de
+    hele curve, zodat je zelf kiest waar je gaat zitten: meer overschrijdingen
+    vangen kost meer loze interventies, en dat is een gesprek met de operatie en
+    niet met de modelleur. Ter vergelijking staat dezelfde regel op basis van
+    seizoensnaief er ook in.
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.subheader("Klopt die kans ook?")
+    kal = d.groupby(pd.cut(d["kans"], np.arange(0, 1.05, 0.1)),
+                    observed=True).agg(voorspeld=("kans", "mean"),
+                                       werkelijk=("overschreden", "mean"),
+                                       n=("kans", "size")).dropna()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="perfect",
+                             line=dict(color="#b45309", width=1.4, dash="dash")))
+    fig.add_trace(go.Scatter(
+        x=kal["voorspeld"], y=kal["werkelijk"], mode="lines+markers",
+        name="gemeten", line=dict(color=ACCENT, width=2.6),
+        marker=dict(size=[float(min(6 + n / 40, 22)) for n in kal["n"]]),
+        text=[f"{int(n)} uren" for n in kal["n"]],
+        hovertemplate="voorspeld %{x:.0%}<br>werkelijk %{y:.0%}"
+                      "<br>%{text}<extra></extra>"))
+    fig = layout(fig, "werkelijk aandeel overschrijdingen", "voorspelde kans",
+                 height=340)
+    fig.update_layout(hovermode="closest")
+    fig.update_xaxes(tickformat=".0%")
+    fig.update_yaxes(tickformat=".0%")
+    st.plotly_chart(fig, **WIDE)
+
+    top = d[d["y"] >= d["y"].quantile(0.90)]
+    bias_top = float((top["pred_lgbm"] - top["y"]).mean())
+    st.markdown(f"""
+    <div class="warn">
+    Dit is de plek waar ik het model tegenspreek. Over de hele backtest is de
+    bias {nl(overall['lgbm']['bias'], 0)} MW, praktisch nul. Maar in het hoogste
+    deciel van de belasting, precies de uren die tegen een capaciteitsgrens aan
+    liggen, voorspelt hetzelfde model gemiddeld {nl(abs(bias_top), 0)} MW
+    <em>te laag</em>. Een kop-MAPE maakt dat volledig onzichtbaar, en het is de
+    verkeerde richting: het model is het meest optimistisch op de momenten waarop
+    optimisme het duurst is. Voor een landelijke reeks is dat een voetnoot. Voor
+    een station met een harde grens is het de kern van de zaak, en het is de
+    eerste correctie die ik zou aanbrengen: een verliesfunctie die onderschatting
+    in de staart zwaarder beprijst, of een apart kwantielmodel voor het bovenste
+    deel van de verdeling.
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.subheader("De prijs van een fout")
+    st.markdown("""
+    Een MAPE vertelt niemand of het model gekocht moet worden. Zet een prijs op de
+    twee richtingen van de fout en dat verandert. Fouten staan hier in MW
+    gedurende één uur, dus in MWh.
+    """)
+    p1, p2, p3 = st.columns([1, 1, 2])
+    producten = {"Dag vooruit (h = 24)": 24, "Twee dagen (h = 48)": 48,
+                 "Week vooruit (h = 168)": 168}
+    product = p1.selectbox("Voorspelproduct", list(producten), index=0)
+    eur_onder = p2.number_input("€ per MWh te laag voorspeld", 0.0, 5000.0, 180.0, 10.0)
+    eur_boven = p2.number_input("€ per MWh te hoog voorspeld", 0.0, 5000.0, 60.0, 10.0)
+    p3.markdown("""<div class='note'>Eén horizon tegelijk, en met opzet. De
+    backtest bevat 168 voorspellingen voor elk uur, één per horizon, en daar
+    overheen sommeren zou dezelfde fout tientallen keren beprijzen. Een prijs
+    hoort bij een product: de dag-vooruit voorspelling is een andere aankoop dan
+    de week-vooruit voorspelling.</div>""", unsafe_allow_html=True)
+
+    w = load_backtest()
+    w = w[w["h"] == producten[product]]
+    yv = w["y"].to_numpy(float)
+    uren = len(yv)
+
+    def jaarkosten(pred) -> float:
+        e = np.asarray(pred, float) - yv
+        return float((np.maximum(-e, 0).sum() * eur_onder
+                      + np.maximum(e, 0).sum() * eur_boven) / uren * HOURS_PER_YEAR)
+
+    kosten = {m: jaarkosten(w[f"pred_{m}"]) for m in MODELS}
+    besparing = kosten["seasonal_naive"] - kosten["lgbm"]
+    vermeden = float((np.abs(w["pred_seasonal_naive"].to_numpy(float) - yv).sum()
+                      - np.abs(w["pred_lgbm"].to_numpy(float) - yv).sum())
+                     / uren * HOURS_PER_YEAR)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Seizoensnaief, foutkosten",
+              "€ " + nl(kosten["seasonal_naive"] / 1e6, 0, " mln/jr"))
+    m2.metric("Gradient boosting, foutkosten",
+              "€ " + nl(kosten["lgbm"] / 1e6, 0, " mln/jr"))
+    m3.metric("Verschil", "€ " + nl(besparing / 1e6, 0, " mln/jr"),
+              nl(besparing / kosten["seasonal_naive"] * 100, 1) + "% lager")
+    m4.metric("Vermeden voorspelfout", nl(vermeden / 1000, 0, " GWh/jr"),
+              "zonder prijskaartje", delta_color="off")
+    st.markdown(f"""
+    <div class="note">
+    Het vierde getal draagt geen prijs, en daarom staat het er. Over een jaar
+    neemt het model dat aantal GWh absolute voorspelfout weg ten opzichte van
+    seizoensnaief, en dat blijft staan wat iemand ook besluit dat een uur fout
+    waard is. Alles links daarvan is hetzelfde feit met een prijs eraan geniet.
     <br><br>
-    The fourth figure carries no price at all, which is why it is there. Over a
-    year the model removes that many GWh of absolute forecast error compared
-    with seasonal naive, and that number stands whatever anyone decides an hour
-    of error is worth. Everything to its left is that same fact with a price
-    stapled on.
-    <br><br>
-    Read the levels with care. This is the entire Dutch grid at a mean load of
-    {summary['load_mean'] / 1000:.1f} GW, so a {overall['lgbm']['mape']:.1f}%
-    error is roughly {overall['lgbm']['mae']:,.0f} MW every hour of the year and
-    any per-MWh price turns that into a large number by construction. It also
-    charges every MWh of error at the full rate, which no settlement regime
-    does. The figure that survives those objections is the
-    <em>difference</em> between two forecasts scored on identical hours, not the
-    level of either. And the cost function itself is settled with the business
-    rather than chosen by whoever built the model, so treat both inputs as
-    placeholders until someone with a budget has replaced them.
+    Lees de niveaus met zorg. Dit is het hele Nederlandse net bij een gemiddelde
+    belasting van {nl(reeks['load_mean'] / 1000, 1)} GW, dus een fout van
+    {nl(overall['lgbm']['mape'], 1)}% is ruwweg {nl(overall['lgbm']['mae'], 0)} MW
+    elk uur van het jaar, en elke prijs per MWh maakt daar per definitie een groot
+    getal van. Het beprijst bovendien elke MWh fout tegen het volle tarief, wat
+    geen enkel afrekenregime doet. Het cijfer dat die bezwaren overleeft is het
+    <em>verschil</em> tussen twee voorspellingen op identieke uren, niet het
+    niveau van een van beide. En de kostenfunctie zelf hoort met de business
+    vastgesteld te worden, niet gekozen door degene die het model bouwde.
     </div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------- 4. monitoring ---
 with tab4:
-    st.subheader("What this would have looked like on a wall")
+    st.subheader("Hoe dit aan de muur zou hangen")
     wk = by_week()
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=wk["week"], y=wk["mape_seasonal_naive"],
-                             name="Seasonal naive", mode="lines",
+                             name="Seizoensnaief", mode="lines",
                              line=dict(color="#a8a29e", width=1.4)))
     fig.add_trace(go.Scatter(x=wk["week"], y=wk["mape_lgbm"],
                              name="Gradient boosting", mode="lines",
                              line=dict(color=ACCENT, width=2.4)))
-    threshold = float(wk["mape_lgbm"].iloc[:52].mean() + 2 * wk["mape_lgbm"].iloc[:52].std())
-    fig.add_hline(y=threshold, line=dict(color="#b45309", width=1.4, dash="dash"),
-                  annotation_text=f"alert at {threshold:.1f}%",
+    drempel = float(wk["mape_lgbm"].iloc[:52].mean()
+                    + 2 * wk["mape_lgbm"].iloc[:52].std())
+    fig.add_hline(y=drempel, line=dict(color="#b45309", width=1.4, dash="dash"),
+                  annotation_text="alarm bij " + nl(drempel, 1) + "%",
                   annotation_position="top left")
     fig = layout(fig, "MAPE per week (%)", "week")
     st.plotly_chart(fig, **WIDE)
 
-    fig = go.Figure(go.Bar(x=wk["week"], y=wk["bias"],
-                           marker_color=np.where(wk["bias"] > 0, ACCENT, "#b45309"),
-                           name="weekly bias"))
+    fig = go.Figure(go.Bar(x=wk["week"], y=wk["bias"], name="bias per week",
+                           marker_color=np.where(wk["bias"] > 0, ACCENT, "#b45309")))
     fig.add_hline(y=0, line=dict(color="#a8a29e", width=1))
-    fig = layout(fig, "mean error per week (MW)", "week", height=280)
+    fig = layout(fig, "gemiddelde fout per week (MW)", "week", height=280)
     st.plotly_chart(fig, **WIDE)
 
-    flagged = wk[wk["mape_lgbm"] > threshold]
-    in_2020 = int((flagged["week"].dt.year == 2020).sum())
-    first_2020 = flagged[flagged["week"].dt.year == 2020]["week"].min()
-    worst = wk.loc[wk["bias"].idxmin()]
+    gemarkeerd = wk[wk["mape_lgbm"] > drempel]
+    in_2020 = int((gemarkeerd["week"].dt.year == 2020).sum())
+    eerste = gemarkeerd[gemarkeerd["week"].dt.year == 2020]["week"].min()
+    slechtste = wk.loc[wk["bias"].idxmin()]
     st.markdown(f"""
     <div class="warn">
-    The alert line sits two standard deviations above the first year's weekly
-    error, the kind of rule a team actually ships. It fires in {len(flagged)} of
-    {len(wk)} weeks, and they are not scattered: {in_2020} of them are in 2020,
-    running almost without a break from the week of
-    {first_2020.strftime('%d %B %Y')} onwards. Demand fell roughly a tenth in a
-    fortnight and every model trained on 2016 to 2019 carried on forecasting the
-    country that no longer existed. The weekly bias turns positive and stays
-    there, which is what separates a broken model from a noisy one: noise
-    alternates sign, a regime change does not. A quarterly retrain is far too
-    slow for that, and the answer is not a better model but a gate. Past the
-    threshold, the forecast waits for a human.
+    De alarmlijn ligt twee standaarddeviaties boven de weekfout van het eerste
+    jaar, het soort regel dat een team ook echt in productie zet. Hij gaat af in
+    {len(gemarkeerd)} van de {len(wk)} weken, en die liggen niet verspreid:
+    {in_2020} ervan vallen in 2020, vrijwel aaneengesloten vanaf de week van
+    {eerste.day} {MAANDEN[eerste.month]} {eerste.year}. De vraag zakte in twee
+    weken ruwweg een tiende, en elk model dat op 2016 tot en met 2019 getraind
+    was bleef het land voorspellen dat niet meer bestond. De weekbias wordt
+    positief en blijft dat, en dat is wat een kapot model onderscheidt van een
+    luidruchtig model: ruis wisselt van teken, een regimebreuk niet. Een
+    kwartaalhertraining is daar veel te traag voor, en het antwoord is geen beter
+    model maar een poort. Boven de drempel wacht de voorspelling op een mens.
     <br><br>
-    The largest single miss points the other way, and at me. In the week of
-    {worst['week'].strftime('%d %B %Y')} the model ran
-    {abs(worst['bias']):,.0f} MW <em>under</em> realisation, the only sustained
-    negative bias in the record. That was the hottest week in the whole series,
-    peaking at 33 °C, with six of the five years' eight hottest August days in
-    it. Load climbed to 13.3 GW against 11.5 GW the week before, and a model
-    that is not allowed to look at temperature had no way to see it coming. The
-    decision to leave weather out buys an honest horizon and costs exactly this,
-    and a monitoring page that hid it would be worth nothing.
+    De grootste misser wijst de andere kant op, en naar mij. In de week van
+    {slechtste['week'].day} {MAANDEN[slechtste['week'].month]}
+    {slechtste['week'].year} liep het model {nl(abs(slechtste['bias']), 0)} MW
+    <em>onder</em> de realisatie, de enige aanhoudende negatieve bias in de hele
+    reeks. Dat was de heetste week van de hele periode, met een piek van 33 °C en
+    zes van de acht warmste augustusdagen van vijf jaar erin. De belasting liep
+    op naar 13,3 GW tegen 11,5 GW de week ervoor, en een model dat niet naar
+    temperatuur mag kijken had geen enkele manier om dat te zien aankomen. De
+    keuze om weer weg te laten koopt een eerlijke horizon en kost precies dit, en
+    een monitoringpagina die dat verstopte zou niets waard zijn.
     </div>
     """, unsafe_allow_html=True)
 
-    st.caption("Weeks above the alert threshold")
+    st.caption("Weken boven de alarmdrempel")
     st.dataframe(
-        flagged.assign(week=flagged["week"].dt.strftime("%Y-%m-%d"))
-        .rename(columns={"mape_lgbm": "model MAPE %",
-                         "mape_seasonal_naive": "seasonal naive MAPE %",
-                         "bias": "bias MW", "coverage": "80% coverage %"})
-        .round(2), hide_index=True, **WIDE)
+        gemarkeerd.assign(week=gemarkeerd["week"].dt.strftime("%Y-%m-%d"))
+        .rename(columns={"mape_lgbm": "MAPE model %",
+                         "mape_seasonal_naive": "MAPE seizoensnaief %",
+                         "bias": "bias MW"}).round(2),
+        hide_index=True, **WIDE)
 
 st.markdown("""
 <div class="footer">
@@ -661,8 +782,8 @@ Ismail Arslan ·
 <a href="https://ismailarslan.tech">ismailarslan.tech</a> ·
 <a href="mailto:contact@ismailarslan.tech">contact@ismailarslan.tech</a> ·
 <a href="https://linkedin.com/in/iqzarslan">linkedin.com/in/iqzarslan</a><br>
-Load data: Open Power System Data, time series 2020-10-06 (CC-BY 4.0), originally
-ENTSO-E Transparency. Temperature: Open-Meteo historical archive (CC-BY 4.0).
-Educational portfolio project; not affiliated with any grid operator.
+Belastingdata: Open Power System Data, time series 2020-10-06 (CC-BY 4.0),
+oorspronkelijk ENTSO-E Transparency. Temperatuur: Open-Meteo historisch archief
+(CC-BY 4.0). Educatief portfolioproject, niet verbonden aan enige netbeheerder.
 </div>
 """, unsafe_allow_html=True)

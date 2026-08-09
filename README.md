@@ -15,6 +15,7 @@ three defensible models, and every number sitting next to the baseline it has
 to beat.
 
 **Live app:** [gridcast-nl.streamlit.app](https://gridcast-nl.streamlit.app/)
+(interface in Dutch; code, comments and this README in English)
 
 ## Why
 
@@ -47,6 +48,13 @@ source, and a pandemic in the final folds.
   Where a model fails is more useful than where it succeeds.
 - **Checks its own intervals.** The 80% band contains 76.0% of realisations.
   That shortfall is on the front page, not buried.
+- **Answers the capacity question, not the accuracy question.** Set a limit and
+  a lead time, and each point forecast becomes a probability that the limit is
+  passed, read off the empirical residual distribution of that horizon. The
+  decision curve sweeps the alarm threshold from cautious to trigger-happy and
+  marks where the plain "forecast above the limit" rule sits: one fixed point on
+  a curve you should be choosing from. A reliability plot checks whether the
+  probability means anything.
 - **Prices the error.** MAPE converted into euros per year against the
   seasonal-naive baseline, with under- and over-forecasting priced separately,
   plus the same fact with no price attached at all: 937 GWh of forecast error
@@ -64,6 +72,13 @@ source, and a pandemic in the final folds.
 
 Ahead of seasonal naive at all 168 horizons, on 669,984 forecasts scored on
 identical hours.
+
+The number that matters more than any of those: at day-ahead the overall bias is
+**+76 MW**, essentially nothing, while in the **top decile of load the same model
+runs 123 MW low**. It is at its most optimistic exactly in the hours that sit
+against a capacity limit. A headline MAPE cannot see that, and for anything with
+a hard limit it is the finding, not a footnote. `selftest.py` asserts it so a
+later change cannot quietly lose it.
 
 ## The models
 
@@ -107,7 +122,11 @@ The demo is honest about its own edges, so here they are in one place.
 - **National load is not grid load.** A distribution network operator forecasts
   a substation or a neighbourhood, where a single industrial connection or one
   street of heat pumps moves the series in a way that averages out completely at
-  national level. The methods transfer; these accuracy figures do not.
+  national level. Two consequences: the accuracy figures here are optimistic for
+  an asset-level series, and the relevant target changes from an average to a
+  tail, since what a limit cares about is the top percent of hours. The decision
+  tab is built for the second point on the data that exists; the first stays a
+  caveat. The methods transfer, the numbers do not.
 - **Gross consumption is not net load.** With enough solar and wind, the
   quantity that matters becomes demand minus generation, which ramps harder and
   is driven by weather rather than by the calendar. In this dataset that
@@ -180,10 +199,11 @@ python scripts/selftest.py    # invariants over the committed backtest
 python scripts/ui_test.py     # headless UI test (streamlit.testing)
 ```
 
-`selftest.py` asserts two things that look like failures: that the intervals are
-too narrow, and that a fold exists where the boosted model loses to seasonal
-naive. Both are true, both are the most informative results here, and pinning
-them stops a later change from quietly hiding either.
+`selftest.py` asserts three things that look like failures: that the intervals
+are too narrow, that the model under-forecasts the top decile, and that a fold
+exists where it loses outright to seasonal naive. All three are true, all three
+are the most informative results here, and pinning them stops a later change
+from quietly hiding any of them.
 
 ## Architecture
 
@@ -211,7 +231,7 @@ cold start to a parquet read.
 ## Project structure
 
 ```
-app.py                      Streamlit UI: problem, backtest, value, monitoring
+app.py                      Streamlit UI: problem, backtest, decision, monitoring
 gridcast/
   data.py                   sources, cleaning, the 2016 cut, calendar
   features.py               origin-safe feature matrix and the horizon guard
@@ -224,6 +244,12 @@ scripts/selftest.py         invariants over the committed results
 scripts/ui_test.py          headless UI test
 tests/                      leakage, lag arithmetic, hand-computed metrics
 data/processed/             parquet the app reads (committed)
+  backtest.parquet          every forecast, every baseline, the 80% band
+  residual_quantiles.parquet  the error distribution per fold and horizon,
+                            built from folds that had already closed. This is
+                            what turns a point forecast into P(limit passed).
+  series.parquet            the hourly series with calendar and temperature
+  monthly_levels.parquet    the evidence behind the 2016 cut
 ```
 
 ## From demo to production

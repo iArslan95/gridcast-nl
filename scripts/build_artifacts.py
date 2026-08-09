@@ -28,6 +28,12 @@ OUT = pathlib.Path(__file__).resolve().parents[1] / "data" / "processed"
 TEST_START = "2018-01-01"
 LEVEL = 0.80
 
+# The full residual distribution per horizon, not just the 80% pair. A capacity
+# question is not "what is the forecast" but "what is the chance the limit is
+# passed", and that needs a distribution. Same rule as the intervals: the
+# quantiles for a fold come only from folds that had already closed.
+QUANTILE_GRID = np.round(np.arange(0.02, 1.0, 0.02), 3)
+
 PRED_COLS = ["pred_persistence", "pred_seasonal_naive", "pred_hour_of_week",
              "pred_fourier", "pred_lgbm"]
 
@@ -78,6 +84,27 @@ def add_intervals(bt: pd.DataFrame) -> pd.DataFrame:
     return bt
 
 
+def residual_distribution(bt: pd.DataFrame) -> pd.DataFrame:
+    """Empirical residual quantiles per (fold, horizon), from earlier folds only.
+
+    Fold 1 is absent for the same reason it carries no interval: at that point
+    no out-of-sample error had been observed, and taking the width from a later
+    fold would be reading the future.
+    """
+    rows = []
+    for fold in sorted(bt["fold"].unique()):
+        past = bt[bt["fold"] < fold]
+        if past.empty:
+            continue
+        resid = past["y"] - past["pred_lgbm"]
+        for h, idx in past.groupby("h").groups.items():
+            r = resid.loc[idx].to_numpy()
+            for q, v in zip(QUANTILE_GRID, np.quantile(r, QUANTILE_GRID)):
+                rows.append({"fold": int(fold), "h": int(h),
+                             "q": float(q), "resid": float(v)})
+    return pd.DataFrame(rows)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fast", action="store_true",
@@ -111,6 +138,10 @@ def main() -> int:
     keep = ["fold", "origin", "target", "h", "y", *PRED_COLS,
             "lo80", "hi80", "is_holiday", "segment"]
     bt[keep].to_parquet(OUT / "backtest.parquet", index=False)
+
+    rq = residual_distribution(bt)
+    rq["resid"] = rq["resid"].astype("float32")
+    rq.to_parquet(OUT / "residual_quantiles.parquet", index=False)
 
     series.reset_index().rename(columns={"index": "utc_timestamp"}) \
         .to_parquet(OUT / "series.parquet", index=False)

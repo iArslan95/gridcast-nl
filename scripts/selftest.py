@@ -154,6 +154,30 @@ def check_segments(bt):
           f"{hol['seasonal_naive']:.2f}% for seasonal naive")
 
 
+def check_tail_bias(bt):
+    """The headline bias is near zero. The bias in the top decile is not.
+
+    For a national series that is a footnote. For anything with a hard capacity
+    limit it is the whole question, because the model is at its most optimistic
+    exactly where optimism is most expensive. Pinned here so a later change
+    cannot quietly drop the finding the decision tab is built on.
+    """
+    d = bt[bt["h"] == 24]
+    overall_bias = float((d["pred_lgbm"] - d["y"]).mean())
+    top = d[d["y"] >= d["y"].quantile(0.90)]
+    tail_bias = float((top["pred_lgbm"] - top["y"]).mean())
+    assert tail_bias < 0, (
+        "the model is expected to under-forecast the top decile; if that ever "
+        "flips, the decision tab needs rewriting rather than reprinting")
+    assert tail_bias < overall_bias - 50, (
+        "the tail bias should be materially worse than the headline bias, "
+        f"got {tail_bias:+.0f} against {overall_bias:+.0f} MW")
+    sn_tail = float((top["pred_seasonal_naive"] - top["y"]).mean())
+    print(f"staart    : day-ahead bias {overall_bias:+.0f} MW overall but "
+          f"{tail_bias:+.0f} MW in the top decile "
+          f"(seasonal naive {sn_tail:+.0f} MW there)")
+
+
 def main():
     bt, meta = load()
     check_same_yardstick(bt)
@@ -161,6 +185,7 @@ def main():
     check_horizon_behaves(by_h)
     check_intervals_are_honest(bt, meta)
     check_segments(bt)
+    check_tail_bias(bt)
     check_the_model_loses_somewhere(bt)
     print("ALL OK")
 
