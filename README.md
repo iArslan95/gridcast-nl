@@ -37,9 +37,18 @@ source, and a pandemic in the final folds.
 
 ## What the app does
 
-- **Shows the problem.** The daily, weekly and yearly shape of national load,
-  what a public holiday does to it (17.3% below a working day), and the
-  temperature relation the model deliberately does not use.
+- **Takes the demand apart.** The yearly, weekly and daily layer of national
+  load, as an hour-by-weekday heatmap and as day profiles split by day type and
+  by season; which public holiday costs how much against a normal working day in
+  the same month; and the temperature relation the model deliberately does not
+  use.
+- **Scores the forecast on those same segments.** Day type, season, time of day,
+  hour by hour and horizon by horizon, with the baseline beside every number,
+  because a single headline MAPE mostly reports how good the model is at night.
+- **Puts the congestion where it actually is.** The operators' capacity map,
+  one dot per supply area, coloured green to red by transport capacity status
+  and sized by the queue in MW, filterable by network operator and by
+  consumption or feed-in.
 - **Backtests properly.** Walk forward, refit quarterly, forecast every six
   hours for 168 hours, score once. No random train/test split anywhere in the
   repository.
@@ -154,6 +163,22 @@ The demo is honest about its own edges, so here they are in one place.
 | [Open Power System Data](https://data.open-power-system-data.org/time_series/2020-10-06/), time series 2020-10-06 | Hourly NL load, originally ENTSO-E Transparency | CC-BY 4.0 |
 | [Open-Meteo](https://open-meteo.com/en/docs/historical-weather-api) historical archive (ERA5) | Hourly 2 m temperature, De Bilt | CC-BY 4.0 |
 | [`holidays`](https://pypi.org/project/holidays/) | Dutch public holidays | MIT |
+| [Capaciteitskaart elektriciteitsnet](https://capaciteitskaart.netbeheernederland.nl/), Netbeheer Nederland via Esri Nederland | Congestion status, queue in MW and parties waiting per supply area | Esri Nederland Terms of Use |
+
+The capacity map is **not** an open licence, so only a derived summary is
+committed: area name, operator, status, queue, and a centroid. The polygons
+themselves are not redistributed. It is also a live snapshot rather than a
+2016-2020 series, and it is in the app for exactly that contrast: the forecast
+is national and historical, the congestion problem is local and current.
+
+Two things about that source worth knowing before anyone builds on it. The 927
+drawn shapes describe 571 supply areas, so summing the queue over rows counts
+the same megawatts two or three times, and 116 areas carry a different status on
+different shapes (the app takes the most severe, which is a choice, not a fact).
+And the status codes carry no domain in the service metadata: their meaning is
+taken from the publisher's own renderer expression, which inverts the intuition,
+since code 0 means capacity is available rather than unknown. Guessing that from
+the numbering would have put the wrong colours on the map.
 
 Two findings from the source are in the app rather than in a footnote, because
 checking them was the first real work of the project.
@@ -231,9 +256,10 @@ cold start to a parquet read.
 ## Project structure
 
 ```
-app.py                      Streamlit UI: problem, backtest, decision, monitoring
+app.py                      Streamlit UI, six sections behind a sidebar
 gridcast/
   data.py                   sources, cleaning, the 2016 cut, calendar
+  capacity.py               the operators' capacity map, deduplicated to areas
   features.py               origin-safe feature matrix and the horizon guard
   backtest.py               rolling-origin folds and the leakage assertion
   model.py                  seasonal Fourier ridge, LightGBM, residual quantiles
@@ -250,6 +276,7 @@ data/processed/             parquet the app reads (committed)
                             what turns a point forecast into P(limit passed).
   series.parquet            the hourly series with calendar and temperature
   monthly_levels.parquet    the evidence behind the 2016 cut
+  capaciteit.parquet        congestion status per supply area, derived summary
 ```
 
 ## From demo to production

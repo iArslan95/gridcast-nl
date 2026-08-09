@@ -1,5 +1,5 @@
 {
-  "built_utc": "2026-08-09T20:54:27.574805+00:00",
+  "built_utc": "2026-08-09T21:32:06.089961+00:00",
   "series": {
     "start": "2016-01-01 00:00:00+00:00",
     "end": "2020-09-30 23:00:00+00:00",
@@ -149,6 +149,27 @@
   },
   "coverage80": 76.0364107011458,
   "interval_width80": 1214.8484317503253,
-  "build_seconds": 128.4,
+  "capaciteit": {
+    "polygonen": 927,
+    "tegenstrijdig": 116,
+    "gebieden": 571,
+    "tekort": 291,
+    "tekort_pct": 50.96322241681261,
+    "wachtrij_mw": 7174.27707,
+    "verzoeken": 14937,
+    "netbeheerders": {
+      "Liander": 243,
+      "Stedin": 207,
+      "Enexis": 112,
+      "Coteq, Enexis": 4,
+      "Westland": 2,
+      "Enexis, Rendo": 2,
+      "onbekend": 1
+    },
+    "stedin_gebieden": 207,
+    "stedin_tekort_pct": 16.908212560386474
+  },
+  "capaciteit_opgehaald": "2026-08-09",
+  "build_seconds": 133.5,
   "fast": false
 }

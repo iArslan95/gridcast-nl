@@ -22,7 +22,7 @@ import pandas as pd
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from gridcast import backtest, baseline, data, kpis, model  # noqa: E402
+from gridcast import backtest, baseline, capacity, data, kpis, model  # noqa: E402
 
 OUT = pathlib.Path(__file__).resolve().parents[1] / "data" / "processed"
 TEST_START = "2018-01-01"
@@ -139,6 +139,13 @@ def main() -> int:
             "lo80", "hi80", "is_holiday", "segment"]
     bt[keep].to_parquet(OUT / "backtest.parquet", index=False)
 
+    print("capacity map...", flush=True)
+    cap = capacity.fetch()
+    cap.to_parquet(OUT / "capaciteit.parquet", index=False)
+    cap_summary = capacity.summarise(cap)
+    print(f"  {cap_summary['gebieden']} supply areas, "
+          f"{cap_summary['tekort_pct']:.0f}% in shortage", flush=True)
+
     rq = residual_distribution(bt)
     rq["resid"] = rq["resid"].astype("float32")
     rq.to_parquet(OUT / "residual_quantiles.parquet", index=False)
@@ -159,6 +166,8 @@ def main() -> int:
         "overall": overall,
         "coverage80": kpis.coverage(scored["y"], scored["lo80"], scored["hi80"]),
         "interval_width80": kpis.interval_width(scored["lo80"], scored["hi80"]),
+        "capaciteit": cap_summary,
+        "capaciteit_opgehaald": str(pd.Timestamp.utcnow().date()),
         "build_seconds": round(time.time() - t_start, 1),
         "fast": args.fast,
     }
