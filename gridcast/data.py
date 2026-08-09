@@ -104,6 +104,10 @@ def calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
     dates = local.date
     is_holiday = np.fromiter((d in nl for d in dates), dtype=bool,
                              count=len(dates))
+    # The name, not just the flag. Easter, Ascension and Whitsun move every
+    # year, so a date cannot identify which holiday it was, and grouping by
+    # date splits one holiday across as many bars as there are years.
+    holiday_name = np.array([nl.get(d, "") for d in dates], dtype=object)
     hour = np.asarray(local.hour)
     dow = np.asarray(local.dayofweek)
     month = np.asarray(local.month)
@@ -115,6 +119,7 @@ def calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
         "doy": np.asarray(local.dayofyear),
         "is_weekend": dow >= 5,
         "is_holiday": is_holiday,
+        "holiday_name": holiday_name,
         # The days between Christmas and New Year behave like nothing else in
         # the year and are not all public holidays.
         "is_yearend": ((month == 12) & (day >= 24)) | ((month == 1) & (day <= 2)),

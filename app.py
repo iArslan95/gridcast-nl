@@ -482,27 +482,48 @@ elif sectie == "Patronen in de vraag":
 
     sub("Welke feestdag hoeveel scheelt",
         "Gemiddelde belasting op de dag zelf, afgezet tegen een gewone werkdag "
-        "in dezelfde maand.")
-    fd = s[s["is_holiday"]].copy()
+        "in dezelfde maand. Per feestdag bij naam, want Pasen, Hemelvaart en "
+        "Pinksteren verschuiven elk jaar en een datum zegt dus niets. Alleen "
+        "feestdagen die doordeweeks vielen, anders meet je het weekend mee.")
+    fd = s[s["is_holiday"] & (s["dag"] < 5)].copy()
     fd["datum"] = fd["local"].dt.date
-    per_dag = fd.groupby("datum").agg(load=("load", "mean"),
-                                      maand=("maand", "first")).reset_index()
-    normaal = (s[s["dagsoort"] == "werkdag"].groupby("maand")["load"].mean())
+    per_dag = fd.groupby(["holiday_name", "datum"]).agg(
+        load=("load", "mean"), maand=("maand", "first")).reset_index()
+    normaal = s[s["dagsoort"] == "werkdag"].groupby("maand")["load"].mean()
     per_dag["afwijking"] = (per_dag["load"] / per_dag["maand"].map(normaal) - 1) * 100
-    per_dag["md"] = per_dag["datum"].map(lambda d: f"{d.day} {MAANDEN[d.month]}")
-    top = per_dag.groupby("md")["afwijking"].mean().sort_values()
+    fdg = (per_dag.groupby("holiday_name")["afwijking"]
+           .agg(gemiddeld="mean", laagste="min", hoogste="max", jaren="count")
+           .sort_values("gemiddeld").reset_index())
     fig = go.Figure(go.Bar(
-        x=top.values, y=top.index, orientation="h",
-        marker_color=[WARM if v < -12 else ACCENT for v in top.values],
-        hovertemplate="%{y}: %{x:.1f}%<extra></extra>"))
+        x=fdg["gemiddeld"], y=fdg["holiday_name"], orientation="h",
+        marker_color=[WARM if n < 3 else ACCENT for n in fdg["jaren"]],
+        error_x=dict(type="data", symmetric=False,
+                     array=fdg["hoogste"] - fdg["gemiddeld"],
+                     arrayminus=fdg["gemiddeld"] - fdg["laagste"],
+                     color="#a8a29e", thickness=1.2, width=4),
+        customdata=np.stack([fdg["jaren"], fdg["laagste"], fdg["hoogste"]], axis=-1),
+        hovertemplate="<b>%{y}</b><br>gemiddeld %{x:.1f}%"
+                      "<br>%{customdata[0]} jaren, van %{customdata[1]:.1f}%"
+                      " tot %{customdata[2]:.1f}%<extra></extra>"))
     fig = layout(fig, "", "afwijking t.o.v. een gewone werkdag in dezelfde maand (%)",
-                 max(280, 20 * len(top)), legend=False)
+                 max(300, 42 * len(fdg)), legend=False)
     st.plotly_chart(fig, **WIDE)
-    note("Eerste kerstdag en nieuwjaarsdag zijn de diepste dalen, Koningsdag en "
-         "Bevrijdingsdag de ondiepste. Dat is geen curiositeit: het is een "
-         "kalenderfeit dat jaren vooruit bekend is, en dus gratis informatie "
-         "voor een model. Waar zo'n model het verliest, is bij een feestdag die "
-         "het in de trainingsdata zelden heeft gezien.")
+    legenda([("gemeten over drie jaar of meer", ACCENT),
+             ("minder dan drie jaar, dunne basis", WARM),
+             ("grijze streep: laagste tot hoogste jaar", "#a8a29e")])
+    note(
+        "Nieuwjaarsdag en eerste kerstdag zijn de diepste dalen, rond een vijfde "
+        "onder een gewone werkdag. Het uitschieteruur is <b>Goede Vrijdag</b>: die "
+        "staat wel in de feestdagenlijst maar is in Nederland voor de meeste "
+        "mensen geen vrije dag, en dat is precies wat de data zegt met "
+        f"{nl(fdg.loc[fdg['holiday_name'] == 'Goede Vrijdag', 'gemiddeld'].iloc[0], 1)}% "
+        "gemiddeld en in één jaar zelfs een hogere belasting dan normaal. Een "
+        "model dat alle feestdagen als één vlag behandelt, leert dus een "
+        "gemiddelde dat voor geen enkele feestdag klopt.<br><br>"
+        "Bevrijdingsdag rust op één jaar en staat daarom in amber: die is alleen "
+        "in een lustrumjaar een vrije dag, en binnen deze reeks is dat alleen "
+        "2020. Eén waarneming is geen effect, en een balk die dat verzwijgt is "
+        "een balk die liegt.")
 
     sub("Temperatuur, die dit model bewust niet gebruikt",
         "Gemiddelde dagbelasting tegen gemiddelde dagtemperatuur, alleen "
