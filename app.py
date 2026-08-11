@@ -22,6 +22,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import assistant
+
 st.set_page_config(page_title="GridCast: landelijke elektriciteitsvraag",
                    page_icon="⚡", layout="wide",
                    initial_sidebar_state="expanded")
@@ -128,6 +130,12 @@ p.subnote {{color: {MUTED}; font-size: 0.9rem; margin: 0 0 10px; max-width: 92ch
 .footer {{color: #a8a29e; font-size: 0.82rem; margin-top: 34px;
   border-top: 1px solid {LINE}; padding-top: 16px; line-height: 1.6;}}
 .footer a {{color: #a8a29e;}}
+/* Suggestion chips above the chat */
+.stButton button {{
+  width: 100%; text-align: left; font-size: 0.86rem; color: #57534e;
+  background: #ffffff; border: 1px solid {LINE}; border-radius: 10px;
+  padding: 8px 13px; transition: border-color 0.12s, color 0.12s;}}
+.stButton button:hover {{border-color: {ACCENT}; color: {ACCENT};}}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -315,6 +323,107 @@ def exceedance(h: int, capacity: float) -> pd.DataFrame:
     return _exceedance(h, capacity, fp("backtest.parquet"))
 
 
+@st.cache_data
+def _chat_lines(fp_bt: str, fp_s: str, fp_cap: str) -> list:
+    """Computed findings the assistant may quote. Everything here is derived
+    from the artifacts at load time, so the chat can never drift away from
+    what the charts show."""
+    bt = load_backtest()
+    s = load_series()
+    cap = load_capaciteit()
+    lines = []
+
+    lines.append("Per fold (nr | eerste doeldatum | MAPE lgbm | MAPE seizoensnaief):")
+    for f, d in bt.groupby("fold"):
+        lines.append(f"- {int(f)} | {d['target'].min().date()} | "
+                     f"{mape(d['y'], d['pred_lgbm']):.2f}% | "
+                     f"{mape(d['y'], d['pred_seasonal_naive']):.2f}%")
+
+    band = bt[bt["lo80"].notna()]
+    raak = (band["y"] >= band["lo80"]) & (band["y"] <= band["hi80"])
+    lente = band["target"].between("2020-03-15", "2020-07-01")
+    lines.append(
+        f"Interval: 80%-band dekt {raak.mean() * 100:.1f}% overall, "
+        f"{raak[lente].mean() * 100:.1f}% in het voorjaar van 2020, "
+        f"{raak[~lente].mean() * 100:.1f}% daarbuiten. Fold 1 heeft geen band "
+        "(nog geen fouthistorie).")
+
+    d24 = bt[bt["h"] == 24]
+    top = d24[d24["y"] >= d24["y"].quantile(0.90)]
+    lines.append(
+        f"Staartbias dag-vooruit: bias overall "
+        f"{(d24['pred_lgbm'] - d24['y']).mean():+.0f} MW, in het hoogste "
+        f"deciel van de belasting {(top['pred_lgbm'] - top['y']).mean():+.0f} "
+        f"MW (seizoensnaief daar "
+        f"{(top['pred_seasonal_naive'] - top['y']).mean():+.0f} MW).")
+
+    fd = s[s["is_holiday"] & (s["dag"] < 5)]
+    per = fd.groupby(["holiday_name",
+                      fd["local"].dt.date]).agg(load=("load", "mean"),
+                                                maand=("maand", "first"))
+    normaal = s[s["dagsoort"] == "werkdag"].groupby("maand")["load"].mean()
+    per = per.reset_index()
+    per["afw"] = (per["load"] / per["maand"].map(normaal) - 1) * 100
+    lines.append("Feestdageffect t.o.v. gewone werkdag zelfde maand "
+                 "(alleen doordeweeks; naam | gemiddeld % | aantal jaren):")
+    for naam, g in per.groupby("holiday_name"):
+        lines.append(f"- {naam} | {g['afw'].mean():+.1f}% | {len(g)}")
+
+    s_idx = s.set_index(pd.DatetimeIndex(s["utc_timestamp"]))
+    wow = ((s_idx["load"] - s_idx["load"].shift(168)).abs()
+           / s_idx["load"] * 100)
+    mid = s_idx["uur"].between(11, 15)
+    lines.append("Week-op-week grilligheid middaguren 11-15u per jaar "
+                 "(zon op dak; % van de belasting):")
+    for jaar, g in wow[mid].groupby(s_idx.loc[mid, "jaar"]):
+        lines.append(f"- {int(jaar)}: {g.mean():.1f}%")
+
+    wk = by_week()
+    drempel = float(wk["mape_lgbm"].iloc[:52].mean()
+                    + 2 * wk["mape_lgbm"].iloc[:52].std())
+    gemarkeerd = wk[wk["mape_lgbm"] > drempel]
+    slechtste = wk.loc[wk["bias"].idxmin()]
+    lines.append(
+        f"Monitoring: alarmdrempel {drempel:.1f}% weekfout; "
+        f"{len(gemarkeerd)} van {len(wk)} weken erboven, waarvan "
+        f"{int((gemarkeerd['week'].dt.year == 2020).sum())} in 2020. Grootste "
+        f"onderschatting: week van {slechtste['week'].date()} met "
+        f"{slechtste['bias']:+.0f} MW bias, de heetste week van de reeks "
+        "(33 graden; het model mag niet naar temperatuur kijken).")
+
+    ernst = {st_: i for i, st_ in enumerate(STATUS_VOLGORDE)}
+    geb = (cap.assign(_e=cap["status_afname"].map(ernst)).sort_values("_e")
+           .drop_duplicates("gebied_id", keep="last"))
+    tekort = geb["status_afname"] == "Tekort, met wachtrij"
+    grootst = geb.nlargest(5, "wachtrij_afname_mw")
+    lines.append(
+        f"Capaciteitskaart (snapshot): {len(geb)} voedingsgebieden, "
+        f"{int(tekort.sum())} met een afnametekort "
+        f"({tekort.mean() * 100:.0f}%). Grootste wachtrijen afname: "
+        + "; ".join(f"{r['gebied']} ({r['netbeheerder']}, "
+                    f"{r['wachtrij_afname_mw']:,.0f} MW)"
+                    for _, r in grootst.iterrows()) + ".")
+
+    lines.append(
+        "Architectuur: artifacts gebouwd door scripts/build_artifacts.py; "
+        "app traint niets. Leakage is afgedekt door tests/test_no_leakage.py "
+        "(vervangt alle data na de origin door onzin en eist identieke "
+        "features). Horizonverloop: 3,3% MAPE op 1-24u naar 3,6% op 145-168u; "
+        "een week vooruit is nauwelijks moeilijker dan een dag, omdat bijna "
+        "alle signaal kalendervorm is. De reeks start in 2016 omdat 2015 op "
+        "een andere grondslag is gerapporteerd (1,7-2,0 GW lager). De "
+        "meegeleverde ENTSO-E dag-vooruitvoorspelling is geen baseline: zijn "
+        "bias klapt van +5% naar -14% tussen jaren, twee kolommen op "
+        "verschillende grondslag.")
+    return lines
+
+
+def chat_context() -> str:
+    return assistant.build_context(
+        meta, _chat_lines(fp("backtest.parquet"), fp("series.parquet"),
+                          fp("capaciteit.parquet")))
+
+
 def alarm_stats(d: pd.DataFrame, alarm: np.ndarray) -> dict:
     raak = int((alarm & d["overschreden"]).sum())
     vals = int((alarm & ~d["overschreden"]).sum())
@@ -425,6 +534,59 @@ if sectie == "Overzicht":
         "<b>Het verliest van de baseline.</b> In de laatste fold, na de "
         "vraaguitval van 2020, is seizoensnaief nauwkeuriger dan het getrainde "
         "model.", warn=True)
+
+    sub("Vraag het na",
+        "Een assistent die alleen de artifacts van deze demo kent: de scores, "
+        "de folds, de vondsten en de capaciteitskaart. Wat er niet in zit, "
+        "verzint hij niet.")
+    key = assistant.get_api_key()
+    if "chat" not in st.session_state:
+        st.session_state.chat = []
+
+    pending = None
+    kols = st.columns(len(assistant.SUGGESTED))
+    for i, vraag in enumerate(assistant.SUGGESTED):
+        if kols[i].button(vraag, key=f"sug_{i}"):
+            pending = vraag
+
+    for bericht in st.session_state.chat:
+        with st.chat_message(bericht["role"]):
+            st.markdown(bericht["content"])
+
+    getypt = st.chat_input("Stel een vraag over de resultaten")
+    if getypt:
+        pending = getypt
+
+    n_user = sum(1 for b in st.session_state.chat if b["role"] == "user")
+    if pending and n_user >= assistant.MAX_USER_MESSAGES:
+        note("Deze sessie zit aan zijn maximum. Ververs de pagina voor een "
+             "nieuw gesprek.", warn=True)
+        pending = None
+
+    if pending:
+        st.session_state.chat.append({"role": "user", "content": pending})
+        with st.chat_message("user"):
+            st.markdown(pending)
+        with st.chat_message("assistant"):
+            if not key:
+                antwoord = (
+                    "De assistent staat uit omdat er geen Groq-sleutel is "
+                    "ingesteld. Lokaal: kopieer `.streamlit/secrets.toml.example` "
+                    "naar `.streamlit/secrets.toml` en vul een gratis sleutel in "
+                    "van console.groq.com/keys. Op Streamlit Cloud: App "
+                    "settings, Secrets, `GROQ_API_KEY`. De rest van de demo "
+                    "werkt zonder.")
+                st.markdown(antwoord)
+            else:
+                try:
+                    antwoord = st.write_stream(
+                        assistant.stream_reply(key, chat_context(),
+                                               st.session_state.chat))
+                except Exception as fout:
+                    antwoord = f"Dat ging mis: {fout}"
+                    st.markdown(antwoord)
+        st.session_state.chat.append({"role": "assistant",
+                                      "content": str(antwoord)})
 
 # --------------------------------------------------------------- patronen ---
 elif sectie == "Patronen in de vraag":

@@ -18,6 +18,12 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+
+def _suggested():
+    import assistant
+    return assistant.SUGGESTED
+
+
 SECTIES = ["Overzicht", "Patronen in de vraag", "Het model",
            "Regio en congestie", "Waarde en besluit", "Monitoring"]
 # Charts expected per section. A section that silently loses a chart is a
@@ -47,6 +53,17 @@ def main():
 
     for sectie in SECTIES:
         run(at, sectie)
+
+    # The chat on the overview: input and suggestion chips render, and without
+    # a key a click yields the setup explanation instead of a crash.
+    run(at, "Overzicht")
+    assert len(at.chat_input) == 1, "the chat input should render"
+    assert len(at.button) == len(_suggested()), \
+        f"expected {len(_suggested())} suggestion chips, got {len(at.button)}"
+    at.button[0].click()
+    at.run()
+    assert not at.exception, f"chat raised on a suggestion click: {at.exception}"
+    assert len(at.chat_message) == 2, "question and reply should both render"
 
     # The forecast viewer has to survive every preset, including the fold-1
     # weeks that carry no interval, and a free date.

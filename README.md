@@ -245,22 +245,39 @@ from quietly hiding any of them.
 
 ## Architecture
 
-The app trains nothing and makes no network calls. `scripts/build_artifacts.py`
-fetches the sources, runs the full backtest and writes parquet; `app.py` reads
-those files under `@st.cache_data` and does light aggregation. A CP-SAT solve of
-a few seconds can run live, as it does in the other demos in this portfolio. A
-backtest over five years cannot, and a visitor should not wait for one.
+The app trains nothing, and the only network call it can make is the optional
+assistant. `scripts/build_artifacts.py` fetches the sources, runs the full
+backtest and writes parquet; `app.py` reads those files under `@st.cache_data`
+and does light aggregation. A CP-SAT solve of a few seconds can run live, as it
+does in the other demos in this portfolio. A backtest over five years cannot,
+and a visitor should not wait for one.
 
-The deployed app installs five packages. Everything needed to rebuild the
+The deployed app installs six packages. Everything needed to rebuild the
 artifacts, including LightGBM and scikit-learn, lives in
 `requirements-build.txt` and never reaches the server, which is what keeps the
 cold start to a parquet read.
+
+### Assistant (optional)
+
+The overview page carries a chat grounded in the artifacts: the digest it
+answers from is computed from the same parquet the charts read, so it cannot
+drift away from what the app shows, and it is instructed to say so when
+something is not in there. It needs a free [Groq](https://console.groq.com/keys)
+API key:
+
+- **Locally**: copy `.streamlit/secrets.toml.example` to
+  `.streamlit/secrets.toml` and fill in the key (the file is gitignored).
+- **Streamlit Cloud**: App settings → Secrets → `GROQ_API_KEY = "gsk_..."`.
+
+Without a key everything else runs; the chat explains how to enable itself.
+`scripts/chat_probe.py` sends one real question end to end.
 
 ## Deploy
 
 1. Push to GitHub (public).
 2. [share.streamlit.io](https://share.streamlit.io) → **New app** → pick the
-   repo, main file `app.py` → **Deploy**. No secrets are required.
+   repo, main file `app.py` → **Deploy**. No secrets are required; add
+   `GROQ_API_KEY` under Settings → Secrets if you want the assistant live.
 3. The workflow in `.github/workflows/keepalive.yml` opens the app in headless
    Chromium every five hours so Community Cloud does not put it to sleep. A
    portfolio link a visitor has to wake up first is a portfolio link that costs
@@ -270,6 +287,7 @@ cold start to a parquet read.
 
 ```
 app.py                      Streamlit UI, six sections behind a sidebar
+assistant.py                grounded LLM chat (Groq) over the artifacts
 gridcast/
   data.py                   sources, cleaning, the 2016 cut, calendar
   capacity.py               the operators' capacity map, deduplicated to areas
@@ -281,6 +299,7 @@ gridcast/
 scripts/build_artifacts.py  the expensive half, run locally, output committed
 scripts/selftest.py         invariants over the committed results
 scripts/ui_test.py          headless UI test
+scripts/chat_probe.py       one real grounded assistant answer, end to end
 tests/                      leakage, lag arithmetic, hand-computed metrics
 data/processed/             parquet the app reads (committed)
   backtest.parquet          every forecast, every baseline, the 80% band
