@@ -763,28 +763,45 @@ elif sectie == "Het model":
         "lijnen middelen over zes horizonnen: dat verwijdert het artefact "
         "exact, zonder iets glad te strijken dat echt is.")
 
-    sub("Betekenen de intervallen wat ze beweren?")
-    fig = go.Figure(go.Scatter(x=glad["h"], y=glad["dekking"],
-                               name="werkelijke dekking",
-                               mode="lines", line=dict(color=ACCENT, width=2.8)))
+    sub("Betekenen de intervallen wat ze beweren?",
+        "Van elke week: welk deel van de realisaties viel binnen de 80%-band "
+        "die het model vooraf tekende. Bij een band die klopt, schommelt deze "
+        "lijn rond de streepjeslijn.")
+    band = bt[bt["lo80"].notna()]
+    dek_week = (band.assign(raak=(band["y"] >= band["lo80"])
+                            & (band["y"] <= band["hi80"]))
+                .groupby("week")["raak"].mean() * 100)
+    fig = go.Figure(go.Scatter(x=dek_week.index, y=dek_week.values,
+                               name="werkelijke dekking", mode="lines",
+                               line=dict(color=ACCENT, width=2.2)))
     fig.add_hline(y=80, line=dict(color=WARM, width=1.6, dash="dash"),
                   annotation_text="80% nominaal", annotation_position="top left")
-    fig = layout(fig, "aandeel realisaties binnen de band (%)",
-                 "horizon h (uren vooruit)", 300, legend=False)
-    fig.update_yaxes(range=[50, 95])
-    fig.update_xaxes(dtick=24)
+    fig.add_vrect(x0="2020-03-15", x1="2020-07-01",
+                  fillcolor="rgba(180, 83, 9, 0.07)", line_width=0,
+                  annotation_text="lockdown", annotation_position="top left",
+                  annotation_font=dict(size=10, color=MUTED))
+    fig = layout(fig, "aandeel realisaties binnen de band (%)", "week", 320,
+                 legend=False)
     st.plotly_chart(fig, **WIDE)
+    dek_2020 = dek_week[dek_week.index >= "2020-03-15"]
     note(
-        f"Een 80%-interval dat {nl(meta['coverage80'], 1)}% van de realisaties "
-        "bevat is te smal, en dit is het getal dat ik als eerste bij een klant "
-        "op tafel zou leggen. De banden zijn de empirische kwantielen van de "
-        "fouten die het model in eerdere folds daadwerkelijk maakte. Ze "
-        "beschrijven het verleden dus goed, en houden alleen stand zolang de "
-        "toekomst zich blijft gedragen als dat verleden. In 2020 hield dat op en "
-        "zakte de dekking naar 55%. De eerste fold heeft helemaal geen interval: "
-        "op dat moment bestond er nog geen fout buiten de trainingsset om een "
-        "breedte uit af te leiden, en er een lenen uit latere folds is in de "
-        "toekomst kijken.", warn=True)
+        f"In rustige tijden schommelt de dekking net onder de 80: gemiddeld "
+        f"{nl(meta['coverage80'], 1)}% over de hele backtest, dus de band is "
+        "ook dan al een fractie te smal. Het echte verhaal begint in maart "
+        f"2020: de dekking klapt naar een dieptepunt van "
+        f"{nl(dek_2020.min(), 0)}% in een enkele week. De banden zijn de "
+        "empirische kwantielen van de fouten die het model in eerdere folds "
+        "daadwerkelijk maakte. Ze beschrijven het verleden dus goed, en houden "
+        "precies zolang stand als de toekomst zich als dat verleden gedraagt. "
+        "Toen het land in lockdown ging, bleef het model de oude wereld "
+        "voorspellen met de oude zekerheid erbij, en dat tweede is het "
+        "gevaarlijkst: een fout getal mét een te stellig interval. De remedie "
+        "is niet een slimmere band maar een die zichzelf bijstelt: "
+        "herkalibreren op een rollend venster, zodat een regimebreuk de band "
+        "verbreedt in plaats van hem stilletjes ongeldig te maken. Langs de "
+        "horizon is de dekking overigens vrijwel vlak, omdat de breedte per "
+        "horizon apart is gefit; de tijd is de as waarop dit stuk kan gaan.",
+        warn=True)
 
     sub("Onder de motorkap",
         "Wat de modellen zien, en waar het winnende model daadwerkelijk op "
