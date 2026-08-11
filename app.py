@@ -95,8 +95,11 @@ CSS = f"""
   display: flex; align-items: center; width: 100%; margin: 0;
   padding: 8px 12px; border-radius: 9px; cursor: pointer;
   transition: background 0.12s;}}
-[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {{
-  display: none;}}
+/* The dot markup differs between Streamlit versions (div on 1.41, other
+   wrappers on 1.6x), so hide whatever the first child is: the label text
+   always sits in the last child. */
+[data-testid="stSidebar"] [role="radiogroup"] label > *:first-child {{
+  display: none !important;}}
 [data-testid="stSidebar"] [role="radiogroup"] label p {{
   font-size: 0.94rem; font-weight: 600; color: #57534e; margin: 0;}}
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {{
@@ -136,6 +139,20 @@ p.subnote {{color: {MUTED}; font-size: 0.9rem; margin: 0 0 10px; max-width: 92ch
   background: #ffffff; border: 1px solid {LINE}; border-radius: 10px;
   padding: 8px 13px; transition: border-color 0.12s, color 0.12s;}}
 .stButton button:hover {{border-color: {ACCENT}; color: {ACCENT};}}
+/* The chat card. Every vertical block carries this testid, so scope to the
+   innermost wrapper that holds the chat header: has(.chat-head) matches all
+   ancestors, and the :not() strips every wrapper that still has a deeper
+   wrapper with the header inside it. */
+[data-testid="stVerticalBlockBorderWrapper"]:has(.chat-head):not(
+    :has([data-testid="stVerticalBlockBorderWrapper"] .chat-head)) {{
+  border: 1px solid #c7d2fe; border-radius: 15px;
+  background: linear-gradient(180deg, #fbfbff 0%, #ffffff 55%);
+  box-shadow: 0 2px 14px rgba(67, 56, 202, 0.07); padding: 10px 14px;}}
+.chat-head {{display: flex; align-items: center; gap: 13px; margin: 2px 0 10px;}}
+.chat-ico {{width: 42px; height: 42px; border-radius: 12px; background: #eef2ff;
+  display: flex; align-items: center; justify-content: center; flex: 0 0 auto;}}
+.chat-head b {{font-size: 1.04rem; color: {INK}; display: block;}}
+.chat-head span {{color: {MUTED}; font-size: 0.86rem; line-height: 1.45;}}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -488,6 +505,73 @@ if sectie == "Overzicht":
         "vooruit, en besteedt de meeste ruimte aan de plekken waar dat misgaat. "
         "Naast elk cijfer staat de baseline die het moet verslaan.")
 
+    BOT_ICO = """<svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+      stroke="#4338ca" stroke-width="1.7" stroke-linecap="round"
+      stroke-linejoin="round"><rect x="5" y="8" width="14" height="11"
+      rx="2.5"/><circle cx="9.5" cy="13" r="1" fill="#4338ca" stroke="none"/>
+      <circle cx="14.5" cy="13" r="1" fill="#4338ca" stroke="none"/>
+      <path d="M12 8V5.4"/><circle cx="12" cy="4.2" r="1.1"/>
+      <path d="M9 16.5h6"/><path d="M2.8 12v3"/><path d="M21.2 12v3"/></svg>"""
+
+    key = assistant.get_api_key()
+    if "chat" not in st.session_state:
+        st.session_state.chat = []
+
+    with st.container(border=True):
+        st.markdown(
+            f"<div class='chat-head'><div class='chat-ico'>{BOT_ICO}</div>"
+            "<div><b>Vraag het deze demo zelf</b>"
+            "<span>Een assistent die alleen de artifacts kent: de scores, de "
+            "folds, de vondsten en de capaciteitskaart. Wat er niet in zit, "
+            "verzint hij niet.</span></div></div>",
+            unsafe_allow_html=True)
+
+        pending = None
+        kols = st.columns(len(assistant.SUGGESTED))
+        for i, vraag in enumerate(assistant.SUGGESTED):
+            if kols[i].button(vraag, key=f"sug_{i}"):
+                pending = vraag
+
+        for bericht in st.session_state.chat:
+            with st.chat_message(bericht["role"]):
+                st.markdown(bericht["content"])
+
+        getypt = st.chat_input("Stel een vraag over de resultaten")
+        if getypt:
+            pending = getypt
+
+        n_user = sum(1 for b in st.session_state.chat if b["role"] == "user")
+        if pending and n_user >= assistant.MAX_USER_MESSAGES:
+            note("Deze sessie zit aan zijn maximum. Ververs de pagina voor "
+                 "een nieuw gesprek.", warn=True)
+            pending = None
+
+        if pending:
+            st.session_state.chat.append({"role": "user", "content": pending})
+            with st.chat_message("user"):
+                st.markdown(pending)
+            with st.chat_message("assistant"):
+                if not key:
+                    antwoord = (
+                        "De assistent staat uit omdat er geen Groq-sleutel is "
+                        "ingesteld. Lokaal: kopieer "
+                        "`.streamlit/secrets.toml.example` naar "
+                        "`.streamlit/secrets.toml` en vul een gratis sleutel "
+                        "in van console.groq.com/keys. Op Streamlit Cloud: "
+                        "App settings, Secrets, `GROQ_API_KEY`. De rest van "
+                        "de demo werkt zonder.")
+                    st.markdown(antwoord)
+                else:
+                    try:
+                        antwoord = st.write_stream(
+                            assistant.stream_reply(key, chat_context(),
+                                                   st.session_state.chat))
+                    except Exception as fout:
+                        antwoord = f"Dat ging mis: {fout}"
+                        st.markdown(antwoord)
+            st.session_state.chat.append({"role": "assistant",
+                                          "content": str(antwoord)})
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("MAPE model", nl(overall["lgbm"]["mape"], 2, "%"),
               nl(overall["lgbm"]["mape"] - overall["seasonal_naive"]["mape"], 2)
@@ -534,59 +618,6 @@ if sectie == "Overzicht":
         "<b>Het verliest van de baseline.</b> In de laatste fold, na de "
         "vraaguitval van 2020, is seizoensnaief nauwkeuriger dan het getrainde "
         "model.", warn=True)
-
-    sub("Vraag het na",
-        "Een assistent die alleen de artifacts van deze demo kent: de scores, "
-        "de folds, de vondsten en de capaciteitskaart. Wat er niet in zit, "
-        "verzint hij niet.")
-    key = assistant.get_api_key()
-    if "chat" not in st.session_state:
-        st.session_state.chat = []
-
-    pending = None
-    kols = st.columns(len(assistant.SUGGESTED))
-    for i, vraag in enumerate(assistant.SUGGESTED):
-        if kols[i].button(vraag, key=f"sug_{i}"):
-            pending = vraag
-
-    for bericht in st.session_state.chat:
-        with st.chat_message(bericht["role"]):
-            st.markdown(bericht["content"])
-
-    getypt = st.chat_input("Stel een vraag over de resultaten")
-    if getypt:
-        pending = getypt
-
-    n_user = sum(1 for b in st.session_state.chat if b["role"] == "user")
-    if pending and n_user >= assistant.MAX_USER_MESSAGES:
-        note("Deze sessie zit aan zijn maximum. Ververs de pagina voor een "
-             "nieuw gesprek.", warn=True)
-        pending = None
-
-    if pending:
-        st.session_state.chat.append({"role": "user", "content": pending})
-        with st.chat_message("user"):
-            st.markdown(pending)
-        with st.chat_message("assistant"):
-            if not key:
-                antwoord = (
-                    "De assistent staat uit omdat er geen Groq-sleutel is "
-                    "ingesteld. Lokaal: kopieer `.streamlit/secrets.toml.example` "
-                    "naar `.streamlit/secrets.toml` en vul een gratis sleutel in "
-                    "van console.groq.com/keys. Op Streamlit Cloud: App "
-                    "settings, Secrets, `GROQ_API_KEY`. De rest van de demo "
-                    "werkt zonder.")
-                st.markdown(antwoord)
-            else:
-                try:
-                    antwoord = st.write_stream(
-                        assistant.stream_reply(key, chat_context(),
-                                               st.session_state.chat))
-                except Exception as fout:
-                    antwoord = f"Dat ging mis: {fout}"
-                    st.markdown(antwoord)
-        st.session_state.chat.append({"role": "assistant",
-                                      "content": str(antwoord)})
 
 # --------------------------------------------------------------- patronen ---
 elif sectie == "Patronen in de vraag":
