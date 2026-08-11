@@ -50,19 +50,14 @@ source, and a pandemic in the final folds.
 - **Opens the hood.** The model table, plus gain-based feature importances of
   the final retrain: the model is essentially a seasonal naive that has learned
   when last week is the wrong reference, and the chart says so.
-- **Scores the forecast on those same segments.** Day type, season, time of day,
-  hour by hour and horizon by horizon, with the baseline beside every number,
-  because a single headline MAPE mostly reports how good the model is at night.
 - **Puts the congestion where it actually is.** The operators' capacity map,
   one dot per supply area, coloured green to red by transport capacity status
   and sized by the queue in MW, filterable by network operator and by
   consumption or feed-in.
 - **Backtests properly.** Walk forward, refit quarterly, forecast every six
   hours for 168 hours, score once. No random train/test split anywhere in the
-  repository.
-- **Reports error by horizon and by segment.** Working day against weekend
-  against holiday, summer against winter, peak against night, fold by fold.
-  Where a model fails is more useful than where it succeeds.
+  repository. Error by horizon sits beside the baselines on the same page as
+  the model itself.
 - **Checks its own intervals.** The 80% band contains 76.0% of realisations.
   That shortfall is on the front page, not buried.
 - **Answers the capacity question, not the accuracy question.** Set a limit and

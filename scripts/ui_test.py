@@ -18,14 +18,12 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-SECTIES = ["Overzicht", "Patronen in de vraag", "De voorspelling zelf",
-           "Voorspellen per segment", "Regio en congestie", "Waarde en besluit",
-           "Monitoring"]
+SECTIES = ["Overzicht", "Patronen in de vraag", "Het model",
+           "Regio en congestie", "Waarde en besluit", "Monitoring"]
 # Charts expected per section. A section that silently loses a chart is a
 # regression the eye would miss.
-CHARTS = {"Overzicht": 0, "Patronen in de vraag": 6, "De voorspelling zelf": 1,
-          "Voorspellen per segment": 6, "Regio en congestie": 2,
-          "Waarde en besluit": 3, "Monitoring": 2}
+CHARTS = {"Overzicht": 0, "Patronen in de vraag": 7, "Het model": 4,
+          "Regio en congestie": 2, "Waarde en besluit": 3, "Monitoring": 2}
 
 
 def run(at: AppTest, sectie: str) -> AppTest:
@@ -52,7 +50,7 @@ def main():
 
     # The forecast viewer has to survive every preset, including the fold-1
     # weeks that carry no interval, and a free date.
-    run(at, "De voorspelling zelf")
+    run(at, "Het model")
     presets = at.selectbox[0].options
     for p in presets:
         at.selectbox[0].select(p)

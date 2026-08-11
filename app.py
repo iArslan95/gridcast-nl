@@ -269,37 +269,6 @@ def by_week() -> pd.DataFrame:
 
 
 @st.cache_data
-def _by_segment(column: str, fingerprint: str) -> pd.DataFrame:
-    bt = load_backtest()
-    rows = []
-    for key, d in bt.groupby(column):
-        row = {"segment": str(key), "uren": len(d)}
-        for m in MODELS:
-            row[NAMES[m]] = mape(d["y"], d[f"pred_{m}"])
-        rows.append(row)
-    return pd.DataFrame(rows).sort_values("uren", ascending=False)
-
-
-def by_segment(column: str) -> pd.DataFrame:
-    return _by_segment(column, fp("backtest.parquet"))
-
-
-@st.cache_data
-def _by_hour_of_day(fingerprint: str) -> pd.DataFrame:
-    bt = load_backtest()
-    return pd.DataFrame([
-        {"uur": int(u),
-         "Gradient boosting": mape(d["y"], d["pred_lgbm"]),
-         "Seizoensnaief": mape(d["y"], d["pred_seasonal_naive"]),
-         "belasting": float(d["y"].mean())}
-        for u, d in bt.groupby("uur")])
-
-
-def by_hour_of_day() -> pd.DataFrame:
-    return _by_hour_of_day(fp("backtest.parquet"))
-
-
-@st.cache_data
 def _exceedance(h: int, capacity: float, fingerprint: str) -> pd.DataFrame:
     """Turn each point forecast into a probability that the limit is passed.
 
@@ -369,9 +338,8 @@ reeks = meta["series"]
 cap_meta = meta.get("capaciteit", {})
 n_forecasts = int(sum(f["forecasts"] for f in meta["folds"]))
 
-SECTIES = ["Overzicht", "Patronen in de vraag", "De voorspelling zelf",
-           "Voorspellen per segment", "Regio en congestie", "Waarde en besluit",
-           "Monitoring"]
+SECTIES = ["Overzicht", "Patronen in de vraag", "Het model",
+           "Regio en congestie", "Waarde en besluit", "Monitoring"]
 
 with st.sidebar:
     st.markdown("<div class='brand'>⚡ Grid<span>Cast</span></div>"
@@ -414,10 +382,10 @@ if sectie == "Overzicht":
              "ermee doen. Elk patroon dat je hier ziet moet een model kunnen "
              "leren, en elk patroon dat het mist zie je later terug in de fout.")
     with b:
-        note("<b>Voorspellen per segment.</b> Eén kop-MAPE vleit vooral de uren "
-             "waar niemand wakker van ligt. Dezelfde backtest, uitgesplitst naar "
-             "dagsoort, seizoen, uur van de dag en horizon, met de baseline "
-             "ernaast.")
+        note("<b>Het model.</b> Eerst één voorspelling van dichtbij, uur voor "
+             "uur tegen wat er echt gebeurde. Daarna het bewijs: de fout per "
+             "horizon, de betrouwbaarheid van de onzekerheidsband, en waar het "
+             "model daadwerkelijk op leunt.")
     with c:
         note("<b>Regio en congestie.</b> De voorspelling hier is landelijk, het "
              "probleem is dat niet. De capaciteitskaart van de netbeheerders "
@@ -582,6 +550,38 @@ elif sectie == "Patronen in de vraag":
         "2020. Eén waarneming is geen effect, en een balk die dat verzwijgt is "
         "een balk die liegt.")
 
+    sub("Waar de reeks zelf grillig geworden is",
+        "Hoeveel een uur afwijkt van hetzelfde uur een week eerder, per uur "
+        "van de dag. Dit is een eigenschap van de data, er komt geen model aan "
+        "te pas.")
+    s_idx = s.set_index(pd.DatetimeIndex(s["utc_timestamp"]))
+    wow = (s_idx["load"] - s_idx["load"].shift(168)).abs() / s_idx["load"] * 100
+    gril = pd.DataFrame({"uur": s_idx["uur"], "jaar": s_idx["jaar"],
+                         "ape": wow}).dropna()
+    fig = go.Figure()
+    for jaar, kleur, breedte in [(2016, "#d6d3d1", 1.6), (2018, "#a8a29e", 1.6),
+                                 (2020, WARM, 2.8)]:
+        prof = gril[gril["jaar"] == jaar].groupby("uur")["ape"].mean()
+        fig.add_trace(go.Scatter(x=prof.index, y=prof.values, name=str(jaar),
+                                 mode="lines",
+                                 line=dict(color=kleur, width=breedte)))
+    fig = layout(fig, "week-op-week verschil (% van de belasting)",
+                 "uur van de dag (lokale tijd)", 320)
+    fig.update_xaxes(dtick=2)
+    st.plotly_chart(fig, **WIDE)
+    note(
+        "De nacht is in vijf jaar niets veranderd: rond 2,5% afwijking van "
+        "dezelfde nacht een week eerder. De middag is ontploft: van 4,5% in "
+        "2016 naar ruim 10% in 2020, en de groei zit exact in de daglichturen. "
+        "Dat is <b>zon op dak</b>. De gemeten landelijke belasting is verbruik "
+        "mínus opwek achter de meter, het Nederlandse zonvermogen is in deze "
+        "periode ruwweg vervijfvoudigd, en daarmee werd het middaguur "
+        "weersafhankelijk: een bewolkte week na een zonnige maakt \"zelfde uur "
+        "vorige week\" waardeloos. Voor elk model geldt hetzelfde, dus dit is "
+        "de plek waar de fout vandaan komt én de plek waar hij elk jaar "
+        "groeit. Wie deze reeks vandaag serieus voorspelt, heeft instraling "
+        "nodig; dat staat in de README als de eerlijke grens van deze demo.")
+
     sub("Temperatuur, die dit model bewust niet gebruikt",
         "Gemiddelde dagbelasting tegen gemiddelde dagtemperatuur, alleen "
         "werkdagen.")
@@ -634,15 +634,14 @@ elif sectie == "Patronen in de vraag":
              "kost een middag, en die stap overslaan is hoe een heel project "
              "verankerd raakt aan iets dat nooit vergelijkbaar was.", warn=True)
 
-# ------------------------------------------------------- forecast viewer ---
-elif sectie == "De voorspelling zelf":
-    kop("Van dichtbij", "Eén voorspelling, uur voor uur",
-        "Alles elders op deze site is een gemiddelde over honderdduizenden "
-        "voorspellingen. Dit is er één, precies zoals hij op het moment van "
-        "afgifte bestond: 168 uur vooruit, met de onzekerheidsband erbij, "
-        "afgezet tegen wat er daarna werkelijk gebeurde. Kies een rustige week "
-        "om te zien wat het model kan, en kies daarna maart 2020 om te zien "
-        "waar het ophoudt.")
+# ------------------------------------------------------------- het model ---
+elif sectie == "Het model":
+    kop("Het model", "Eerst kijken, dan meten",
+        "Eén voorspelling van dichtbij, precies zoals hij op het moment van "
+        "afgifte bestond: 168 uur vooruit, met de onzekerheidsband, afgezet "
+        "tegen wat er daarna werkelijk gebeurde. Daaronder het bewijs over de "
+        "volle backtest. Kies een rustige week om te zien wat het model kan, "
+        "en daarna maart 2020 om te zien waar het ophoudt.")
 
     bt = load_backtest()
     PRESETS = {
@@ -720,100 +719,9 @@ elif sectie == "De voorspelling zelf":
         "geen bewijs, daarvoor zijn de andere secties; maar wie hier een paar "
         "weken doorklikt, weet daarna wat die gemiddelden betekenen.")
 
-# ------------------------------------------------------ segment forecasts ---
-elif sectie == "Voorspellen per segment":
-    kop("Backtest", "Eén gemiddelde verbergt precies wat je wilt weten",
-        "Dezelfde rolling origin backtest, steeds opnieuw uitgesplitst. Het "
-        "model wordt elk kwartaal opnieuw gefit op alles tot die knip en op "
-        "niets erna, en voorspelt daarna elke zes uur 168 uur vooruit. Die "
-        "voorspellingen worden één keer gescoord en nooit herzien.")
-
-    sub("Per dagsoort, seizoen en dagdeel",
-        "MAPE per segment, voor alle vier de modellen naast elkaar.")
-    a, b, c = st.columns(3)
-    with a:
-        st.caption("dagsoort")
-        st.dataframe(by_segment("dagsoort").round(2), hide_index=True, **WIDE)
-    with b:
-        st.caption("seizoen")
-        st.dataframe(by_segment("seizoen").round(2), hide_index=True, **WIDE)
-    with c:
-        st.caption("dagdeel")
-        st.dataframe(by_segment("dagdeel").round(2), hide_index=True, **WIDE)
-    note("Op feestdagen verdient het model zijn bestaan: het halveert ruwweg de "
-         "fout van seizoensnaief, dat geen enkele manier heeft om te weten dat "
-         "het vandaag geen normale donderdag is. In de winter is alles "
-         "makkelijker dan in de zomer, wat tegen de intuïtie in gaat maar volgt "
-         "uit de vorm: een winterprofiel is scherper en regelmatiger, een "
-         "zomerprofiel vlakker en gevoeliger voor weer dat het model niet ziet.")
-
-    sub("Per uur van de dag, en waarom de middag het probleem is",
-        "Niet de piekuren van de vraag zijn het moeilijkst, maar het dal "
-        "ertussen. Dat is geen toeval, en het is de interessantste vondst van "
-        "deze pagina.")
-    hod = by_hour_of_day()
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hod["uur"], y=hod["Seizoensnaief"],
-                             name="Seizoensnaief", mode="lines",
-                             line=dict(color="#57534e", width=1.8)))
-    fig.add_trace(go.Scatter(x=hod["uur"], y=hod["Gradient boosting"],
-                             name="Gradient boosting", mode="lines",
-                             line=dict(color=ACCENT, width=2.8)))
-    fig = layout(fig, "MAPE (%)", "uur van de dag (lokale tijd)", 320)
-    fig.update_xaxes(dtick=2)
-    st.plotly_chart(fig, **WIDE)
-    beste, slechtste = hod.loc[hod["Gradient boosting"].idxmin()], \
-        hod.loc[hod["Gradient boosting"].idxmax()]
-    note(
-        f"Het beste uur is {int(beste['uur'])}:00 met "
-        f"{nl(beste['Gradient boosting'], 2)}%, het slechtste "
-        f"{int(slechtste['uur'])}:00 met {nl(slechtste['Gradient boosting'], 2)}%, "
-        "bijna drie keer zoveel. Let op wáár die piek zit: niet op de "
-        "ochtend- of avondpiek van de vraag, maar rond het middaguur, precies "
-        "in het vraagdal ertussen. De fout volgt dus niet de drukte. Ook "
-        "seizoensnaief piekt daar, dus dit is geen modelfout maar een "
-        "eigenschap van de reeks zelf: middaguren zijn van week op week het "
-        "grilligst. De grafiek hieronder laat zien waarom.")
-
-    s_vol = load_series()
-    s_vol = s_vol.set_index(pd.DatetimeIndex(s_vol["utc_timestamp"]))
-    sn_ape = (s_vol["load"] - s_vol["load"].shift(168)).abs() / s_vol["load"] * 100
-    vol = pd.DataFrame({"uur": s_vol["uur"], "jaar": s_vol["jaar"],
-                        "ape": sn_ape}).dropna()
-    fig = go.Figure()
-    for jaar, kleur, breedte in [(2016, "#d6d3d1", 1.6), (2018, "#a8a29e", 1.6),
-                                 (2020, WARM, 2.8)]:
-        prof = vol[vol["jaar"] == jaar].groupby("uur")["ape"].mean()
-        fig.add_trace(go.Scatter(x=prof.index, y=prof.values, name=str(jaar),
-                                 mode="lines", line=dict(color=kleur,
-                                                         width=breedte)))
-    fig = layout(fig, "week-op-week verschil (% van de belasting)",
-                 "uur van de dag (lokale tijd)", 320)
-    fig.update_xaxes(dtick=2)
-    st.plotly_chart(fig, **WIDE)
-    note(
-        "Dit is dezelfde meting, hoe veel een uur afwijkt van hetzelfde uur "
-        "een week eerder, per jaar getekend. De nacht is in vijf jaar niets "
-        "veranderd: 2,3% in 2016, 2,6% in 2020. De middag is ontploft: van "
-        "4,5% in 2016 via 6,5% in 2019 naar ruim 10% in 2020, en de groei zit "
-        "exact in de daglichturen. Dat is <b>zon op dak</b>. De gemeten "
-        "landelijke belasting is verbruik mínus eigen opwek achter de meter, "
-        "het Nederlandse zonvermogen is in deze periode ruwweg vervijfvoudigd, "
-        "en daarmee werd het middaguur weersafhankelijk: een bewolkte week na "
-        "een zonnige maakt \"zelfde uur vorige week\" waardeloos. 2020 wordt "
-        "extra aangezet door de lockdown, maar de trend loopt al van 2016 tot "
-        "en met 2019 monotoon op.<br><br>"
-        "Voor een netbeheerder is dit de kern: de fout zit niet meer bij de "
-        "vraagpieken maar bij de opwek, hij groeit elk jaar, en geen enkele "
-        "kalenderfeature vangt hem. Wie deze reeks vandaag serieus wil "
-        "voorspellen heeft instraling nodig, met een eigen foutenbegroting "
-        "voor de instralingsverwachting, en uiteindelijk een aparte "
-        "netto-belastingaanpak. Dat staat in de README als de eerlijke grens "
-        "van deze demo, en deze twee grafieken zijn het bewijs dat die grens "
-        "geen formaliteit is.")
-
-    sub("Per horizon",
-        "Van één uur tot een week vooruit, alle modellen op dezelfde uren "
+    sub("De fout per horizon, over de volle backtest",
+        "Elke zes uur een nieuwe afgifte, 168 uur vooruit, elk kwartaal "
+        "hertraind op alleen het verleden. Alle modellen op dezelfde uren "
         "gescoord.")
     h = by_horizon()
     # Each horizon lands on exactly four clock hours (origins run 00/06/12/18
@@ -829,7 +737,7 @@ elif sectie == "Voorspellen per segment":
     fig.add_trace(go.Scatter(x=h["h"], y=h["mape_lgbm"], name="per losse horizon",
                              mode="lines",
                              line=dict(color="#c7d2fe", width=1.0)))
-    for m in MODELS:
+    for m in ["lgbm", "seasonal_naive", "fourier"]:
         fig.add_trace(go.Scatter(x=glad["h"], y=glad[f"mape_{m}"], name=NAMES[m],
                                  mode="lines", line=dict(**STYLE[m])))
     fig = layout(fig, "MAPE (%)", "horizon h (uren vooruit)", 340)
@@ -847,29 +755,13 @@ elif sectie == "Voorspellen per segment":
         "lopen vlak. Alleen het geboosterde model houdt recente informatie "
         "vast, en alleen dat heeft een lijn die loopt.<br><br>"
         "Over de lichte lijn: per losse horizon zaagtandt de meting met "
-        "periode zes. Dat is geen modelgedrag maar bemonstering. De "
-        "voorspellingen worden om 00, 06, 12 en 18 UTC afgegeven, dus elke "
-        "horizon landt op vier kloktijden en die set verschuift met h, terwijl "
-        "de vorige grafiek liet zien dat de fout sterk van het uur van de dag "
-        "afhangt. Zes opeenvolgende horizonnen dekken elke kloktijdmix precies "
-        "één keer, dus de dikke lijnen middelen over zes horizonnen: dat "
-        "verwijdert het artefact exact, zonder iets glad te strijken dat echt "
-        "is.")
-
-    sub("Bias, apart gehouden van accuratesse")
-    fig = go.Figure()
-    for m in MODELS:
-        fig.add_trace(go.Scatter(x=glad["h"], y=glad[f"bias_{m}"], name=NAMES[m],
-                                 mode="lines", line=dict(**STYLE[m])))
-    fig.add_hline(y=0, line=dict(color="#a8a29e", width=1))
-    fig = layout(fig, "gemiddelde fout (MW), positief = te hoog",
-                 "horizon h (uren vooruit)", 300)
-    fig.update_xaxes(dtick=24)
-    st.plotly_chart(fig, **WIDE)
-    note("Twee modellen kunnen dezelfde MAE hebben en iets totaal verschillends "
-         "betekenen. Fouten die rond nul schommelen zijn ruis, en daar houd je "
-         "een reserve tegen aan. Fouten die elk uur dezelfde kant op leunen zijn "
-         "een systematisch tekort, en dat repareer je in het model.")
+        "periode zes. Dat is geen modelgedrag maar bemonstering: de afgiftes "
+        "lopen om 00, 06, 12 en 18 UTC, dus elke horizon landt op vier "
+        "kloktijden en die set verschuift met h, terwijl de fout sterk van "
+        "het uur van de dag afhangt (zie Patronen). Zes opeenvolgende "
+        "horizonnen dekken elke kloktijdmix precies één keer, dus de dikke "
+        "lijnen middelen over zes horizonnen: dat verwijdert het artefact "
+        "exact, zonder iets glad te strijken dat echt is.")
 
     sub("Betekenen de intervallen wat ze beweren?")
     fig = go.Figure(go.Scatter(x=glad["h"], y=glad["dekking"],
