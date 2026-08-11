@@ -86,6 +86,23 @@ CSS = f"""
 .brand-sub {{color: {MUTED}; font-size: 0.82rem; margin: 2px 0 18px; line-height: 1.45;}}
 .side-note {{color: #a8a29e; font-size: 0.76rem; line-height: 1.5;
   border-top: 1px solid {LINE}; margin-top: 20px; padding-top: 14px;}}
+/* The sidebar radio is navigation, not a form: hide the radio dots and style
+   each option as a nav row, with the checked one as the active page. */
+[data-testid="stSidebar"] [role="radiogroup"] {{gap: 2px;}}
+[data-testid="stSidebar"] [role="radiogroup"] label {{
+  display: flex; align-items: center; width: 100%; margin: 0;
+  padding: 8px 12px; border-radius: 9px; cursor: pointer;
+  transition: background 0.12s;}}
+[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {{
+  display: none;}}
+[data-testid="stSidebar"] [role="radiogroup"] label p {{
+  font-size: 0.94rem; font-weight: 600; color: #57534e; margin: 0;}}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {{
+  background: #f5f5f4;}}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
+  background: #eef2ff;}}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {{
+  color: {ACCENT};}}
 .eyebrow {{text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.72rem;
   font-weight: 700; color: {ACCENT}; margin-bottom: 6px;}}
 h1.sec {{font-size: 1.72rem; font-weight: 700; color: {INK}; margin: 0 0 8px;
